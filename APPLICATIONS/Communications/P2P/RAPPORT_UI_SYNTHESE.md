@@ -1,27 +1,27 @@
-# 🌐 Rapport de Synthèse — Swarm des 10 Personas Experts UI
-### Projet : P2P Mesh — Espace Collaboratif Décentralisé (Extension Chrome + Web App PWA)
+# 🌐 Synthèse Maître — Swarm des 10 Personas Experts UI & Best Practices 2025/2026
+### Projet : P2P Mesh Workspace (Extension Chrome Side Panel MV3 + Web App PWA)
 
-**Auteurs** : Kurodo & Antigravity (DeepMind Advanced Agentic Coding)  
-**Date** : 21 Août 2026  
-**Facteurs de forme audités** : Side panel Chrome étroit (~320–400px) & Web App responsive (320px $\rightarrow$ 1920px+ Ultrawide)
+**Auteurs** : Kurodo & Swarm des 10 Experts UI Antigravity (DeepMind Advanced Agentic Coding)  
+**Date d'évaluation** : 21 Août 2026  
+**Périmètre audité** : Chrome Side Panel (~320–420px), Mobile PWA (320px–430px), Tablette (768px–1024px), Desktop (1440px), Ultrawide 4K (1920px+)
 
 ---
 
 ## 1. Matrice de Couverture des Écrans & Facteurs de Forme
 
-| Écran Cible | Résolution | Contexte d'Usage | Couverture & Statut |
+| Écran Cible | Résolution | Contexte d'Usage | Couverture & Optimisations 2026 |
 |---|---|---|---|
-| **Side panel Chrome** | 320–400 px | Extension Chrome MV3 (priorité haute) | ✅ Optimisé : disposition verticale, onglets compacts, boutons tactiles |
-| **Petit Téléphone** | 320–360 px | PWA / Navigateur mobile compact | ✅ Optimisé : polices adaptées, onglets défilables, cibles $\ge$ 40px |
-| **Smartphone Courant** | 375–430 px | PWA / Mobile standard (iPhone, Pixel, Galaxy) | ✅ Optimisé : Safe-area insets, 100dvh, anti-zoom iOS (16px) |
-| **Tablette Portrait** | 768 px | iPad / Tablette Android | ✅ Optimisé : Disposition 2 colonnes pour Drive & Forum |
-| **Tablette Paysage / Laptop**| 1024 px | Écrans portables standards | ✅ Optimisé : Grille média adaptative, max-width de lecture |
-| **Desktop Standard** | 1440 px | Écrans de bureau 1080p/1440p | ✅ Optimisé : Largeur max centrée, bulles de chat bornées à 70% |
-| **Ultrawide / TV** | 1920 px+ | Grands écrans 4K & Ultrawide | ✅ Optimisé : Conteneur maître centré (max 1560px), mosaïque 4 colonnes |
+| **Chrome Side Panel** | 320–420 px | Extension Chrome MV3 | ✅ Optimisé : Container Queries, navigation fléchée WAI-ARIA, bulles compactes |
+| **Petit Mobile** | 320–360 px | Mobile compact (iPhone SE, split-screen) | ✅ Optimisé : Cibles tactiles $\ge 44$px, zoom accessible WCAG 2.2 |
+| **Smartphone Courant** | 375–430 px | iOS/Android PWA standard | ✅ Optimisé : `100dvh`, `interactive-widget=resizes-content`, VirtualKeyboard API |
+| **Tablette Portrait** | 768 px | iPad, Tablettes Android | ✅ Optimisé : Grille adaptative 2 colonnes Drive & Forum |
+| **Tablette Paysage / Laptop**| 1024 px | Écrans portables | ✅ Optimisé : Mosaïque WebRTC adaptative, max reading width 720px |
+| **Desktop Standard** | 1440 px | Écrans de bureau 1080p/1440p | ✅ Optimisé : Raccourcis clavier productivité (`Cmd/Ctrl+1..5`, `/`, `Ctrl+Shift+M`) |
+| **Ultrawide / 4K** | 1920 px+ | Grands écrans 21:9 & 4K | ✅ Optimisé : Conteneur maître centré (`max-width: 1560px`), CSS Subgrid |
 
 ---
 
-## 2. Synthèse Détaillée des 10 Personas Experts
+## 2. Synthèse Détaillée par Persona Expert (10 Domaines Spécialisés)
 
 ```
                                   ┌──────────────────────────┐
@@ -30,144 +30,162 @@
          ┌───────────────────┬──────────────────┼──────────────────┬───────────────────┐
          ▼                   ▼                  ▼                  ▼                   ▼
    1. Mobile-First     2. Accessibilité   3. Onboarding & IA 4. Design Système  5. Collab Temps Réel
-      (Touch/PWA)         (WCAG 2.2)         (Mental Model)     (Glass Tokens)     (Live & Chat)
+      (Touch/PWA)         (WCAG 2.2)         (Mental Model)     (Glass Tokens)     (Live & CRDT)
          │                   │                  │                  │                   │
          ├───────────────────┼──────────────────┼──────────────────┼───────────────────┤
          ▼                   ▼                  ▼                  ▼                   ▼
    6. Visioconférence  7. Sécurité & Priv 8. Perf & Latence  9. i18n / Localis. 10. Desktop / Ultra
-      (Lobby / VAD)       (E2EE / Trust)     (OPFS / Memory)    (Formats / Wrap)    (Max-width Grid)
+      (Lobby / VAD)       (E2EE / Trust)     (OPFS / Memory)    (Intl / RTL)        (Multi-Panels)
 ```
 
 ---
 
-### Persona 1 : Mobile-First UX (PWA)
-* **Profil** : Utilisateur mobile nomade sur smartphone à une main.
-* **Lentille** : Cibles tactiles, encoches (safe-area), 100dvh, clavier virtuel, gestes et PWA.
+### Persona 1 : Mobile-First UX & PWA
+* **Benchmark 2025/2026** : `100dvh`, `<meta name="viewport" content="... interactive-widget=resizes-content">`, VirtualKeyboard API (`navigator.virtualKeyboard.overlaysContent = true`), cibles tactiles minimales 44×44px (Apple HIG) / 48×48px (Material Design 3), Rich Web App Manifest (`launch_handler`, `shortcuts`, `screenshots`).
 * **Findings Clés** :
-  - `MOB-01` (P1) : Les boutons-icônes (`.icon-btn` 30×30px) étaient trop étroits pour le pouce $\rightarrow$ Passage à une zone cliquable de $\ge 38$–$44$px avec padding tactile.
-  - `MOB-02` (P1) : Sur iPhone, les champs de texte avec `font-size < 16px` provoquaient un zoom involontaire de la page $\rightarrow$ Règle forcée à 16px sur inputs mobiles dans `mobile.css`.
-  - `MOB-03` (P2) : Les toasts masquaient la zone de saisie du chat $\rightarrow$ Décalage dynamique `bottom: calc(96px + env(safe-area-inset-bottom))`.
+  - `MOB-01` (P0) : `maximum-scale=1.0` supprimé pour restaurer le zoom utilisateur WCAG 2.2 (1.4.4) et ajout de `interactive-widget=resizes-content`.
+  - `MOB-02` (P0) : Cache complet des modules ES6 dans `sw.js` pour fonctionnement 100% hors-ligne.
+  - `MOB-03` (P1) : Cibles tactiles agrandies à $\ge 44$px et découplage du `:hover` pour les écrans tactiles (`@media (hover: none)`).
+  - `MOB-04` (P1) : Safe-areas `env(safe-area-inset-*)` appliquées aux modales et en mode paysage.
+  - `MOB-05` (P1) : Manifest WebApp enrichi avec `launch_handler`, `shortcuts` et `screenshots`.
 
 ---
 
 ### Persona 2 : Accessibilité (WCAG 2.2 AA/AAA)
-* **Profil** : Personnes non/malvoyantes, déficience motrice ou cognitive.
-* **Lentille** : Lecteurs d'écran, focus clavier, contrastes, repères ARIA, `prefers-reduced-motion`.
+* **Benchmark 2025/2026** : WAI-ARIA APG Tabs Pattern avec roving tabindex, Focus Trap modal avec attribut HTML `inert`, Live Regions non polluantes (`role="log"` pour le chat, `role="status"` / `role="alert"` pour les toasts), contrastes WCAG AA (ratio $\ge 4.5:1$).
 * **Findings Clés** :
-  - `A11Y-01` (P0) : Absence d'attributs `aria-label` sur les boutons-icônes essentiels (📎, 😊, ⚙️, 👁️, 📋, ❌, etc.) $\rightarrow$ Ajout de libellés descriptifs sur 100% des éléments interactifs.
-  - `A11Y-02` (P1) : Contraste insuffisant de `--text-muted: #64748b` sur fond sombre (ratio 4.1:1) $\rightarrow$ Rehaussé à `#8fa0b5` (ratio $\ge 4.8:1$, conforme WCAG AA).
-  - `A11Y-03` (P1) : Navigation clavier sans indicateur visuel net $\rightarrow$ Ajout d'une règle `:focus-visible` avec anneau cyan lumineux `outline: 2px solid var(--accent-cyan)` et `outline-offset: 2px`.
-  - `A11Y-04` (P2) : Respect des utilisateurs sensibles aux mouvements $\rightarrow$ Intégration de la directive `@media (prefers-reduced-motion: reduce)`.
-  - `A11Y-05` (P1) : Zone de messages et indicateur de frappe non annoncés par les lecteurs d'écran $\rightarrow$ Ajout de `aria-live="polite"` et `role="tablist" / role="tabpanel"`.
+  - `A11Y-01` (P1) : Focus Trap complet dans `modal.js` avec bouclage Tab/Shift+Tab et isolation `inert` sur `#view-main-app`.
+  - `A11Y-02` (P1) : Roving tabindex (`tabindex="0"` sur onglet actif, `-1` sur inactifs) et navigation par flèches (`ArrowLeft`/`ArrowRight`/`Home`/`End`).
+  - `A11Y-03` (P0) : Cartes de forum et dossiers Drive rendus entièrement accessibles au clavier (`role="button"`, `tabindex="0"`, touches `Enter`/`Space`).
+  - `A11Y-04` (P1) : Isolation sonore du rechargement d'historique de chat pour éviter les floods de synthèse vocale.
+  - `A11Y-05` (P1) : Annonces vocales automatiques sur les toasts via `role="status"` / `role="alert"` et `aria-live="polite"`.
 
 ---
 
 ### Persona 3 : Onboarding & Architecture de l'Information
-* **Profil** : Utilisateur grand public non-technique découvrant le concept « zéro serveur ».
-* **Lentille** : Modèle mental du Code Papier, premier lancement, états vides explicites.
+* **Benchmark 2025/2026** : Cérémonie de sauvegarde de la clé physique (*Backup Ceremony*), jauge d'entropie sémantique (4 segments qualitatifs au lieu de bits bruts), masquage anti-shoulder surfing (`filter: blur(6px)`), empty states guidants avec CTA d'invitation rapide, télémétrie de signalement (Trackers WebTorrent / Nostr / STUN).
 * **Findings Clés** :
-  - `ONB-01` (P1) : L'explication de l'absence de compte / serveur était abstraite $\rightarrow$ Clarté renforcée (« Secret hors-ligne physique, 0 serveur applicatif »).
-  - `ONB-02` (P1) : États vides austères lors du premier lancement $\rightarrow$ Ajout de cartes d'accueil explicatives dans les 5 onglets avec boutons d'action d'amorce (*« Créer un Sujet »*, *« Partager un document »*, *« Inviter un pair »*).
-  - `ONB-03` (P2) : Retour visuel lors de la copie du code papier généré $\rightarrow$ Bouton avec état transitoire *« ✓ Copié ! »* et vibration visuelle.
+  - `ONB-01` (P1) : Découplage clair entre les flux *"Rejoindre un espace"* et *"Créer un espace"* avec confirmation explicite de sauvegarde.
+  - `ONB-02` (P1) : Jauge d'entropie avec validation syntaxique (6 mots + 4 chiffres) et blocage préventif des dérivations PBKDF2 sur codes incomplets.
+  - `ONB-03` (P2) : Floutage par défaut du code maître généré avec révélation volontaire et purge presse-papier (45s).
+  - `ONB-04` (P1) : États vides du Chat et du Roster équipés d'un composant d'accueil avec bouton de copie d'invitation.
+  - `ONB-05` (P1) : Popover de diagnostic réseau pour suivre l'état de connexion aux trackers et relais lors de l'attente de pairs.
 
 ---
 
-### Persona 4 : Design Visuel & Système de Tokens
-* **Profil** : Designer UI / Directeur artistique.
-* **Lentille** : Cohérence des tokens CSS, rythme d'espacement, glassmorphism sombre.
+### Persona 4 : Design Visuel & Design System
+* **Benchmark 2025/2026** : Spacing scale à pas de 4px (`--space-1` à `--space-8`), typographie fluide `clamp()`, optimisation GPU du glassmorphism (`contain: paint`, `isolation: isolate`), support de `@media (prefers-reduced-transparency: reduce)`, formalisation du composant `.glass-card`.
 * **Findings Clés** :
-  - `DES-01` (P1) : Styles en dur résiduels dans certains composants $\rightarrow$ Factorisation stricte dans `variables.css` (`--focus-ring`, `--focus-outline`, `--radius-md`).
-  - `DES-02` (P2) : Profondeur des cartes en glassmorphism $\rightarrow$ Harmonisation des `backdrop-filter: blur(16px)` et ombres douces `var(--shadow-md)`.
+  - `DES-01` (P1) : Échelle de tokens d'espacement standardisée (`--space-1` à `--space-8`) éliminant les valeurs magiques.
+  - `DES-02` (P1) : Suppression des tailles de police fractionnaires (`13.5px`, `10.5px`) au profit d'une échelle sémantique fluide.
+  - `DES-03` (P1) : Prise en compte de `prefers-reduced-transparency` et isolation GPU des calques dépolis.
+  - `DES-04` (P1) : Formalisation de la classe `.glass-card` dans `components.css` et nettoyage des styles inline.
+  - `DES-06` (P2) : Unification visuelle des badges, pills et indicateurs de statut.
 
 ---
 
 ### Persona 5 : UX Collaboration Temps Réel
-* **Profil** : Équipe distribuée en travail collaboratif intensif.
-* **Lentille** : Réactivité du Chat, indicateurs d'écriture, non-lus, partage de médias.
+* **Benchmark 2025/2026** : États de diffusion P2P multi-niveaux (Pending 🕒, Sent ✓ N pairs, Replicated ✓✓), heartbeat indicateur de frappe (1500ms) avec extinction propre, défilement intelligent *Jump to latest*, jauge de progression et annulation (`AbortController`) pour le téléchargement de gros médias P2P.
 * **Findings Clés** :
-  - `COL-01` (P1) : Indicateur de saisie (*typing indicator*) saccadé en cas de frappe rapide $\rightarrow$ Débouncing stabilisé à 2500ms avec extinction propre au départ du message.
-  - `COL-02` (P1) : Pastille *« Nouveaux messages »* quand l'utilisateur fait défiler le chat vers le haut $\rightarrow$ Bouton flottant de reprise immédiate du direct (*Jump to latest*).
-  - `COL-03` (P1) : Médias joints dans le chat (photos, vidéos, audio) $\rightarrow$ Prévisualisation immédiate et déchargement mémoire via `URL.revokeObjectURL`.
+  - `COL-01` (P1) : Badges d'état de diffusion P2P sur les bulles de messages (`🕒` local, `✓ N` diffusé, `✓✓` répliqué CRDT).
+  - `COL-02` (P1) : Élimination des fuites mémoire de Blob URLs dans `renderStaged` avec `URL.revokeObjectURL` systématique.
+  - `COL-03` (P1) : Jauge de progression en pourcentage et bouton d'annulation pour les transferts de gros fichiers.
+  - `COL-04` (P2) : Stabilisation du typing indicator par heartbeat et émission de `isTyping = false` au changement de canal.
+  - `COL-07` (P2) : Ajout incrémental des réponses de forum dans le DOM sans écrasement destructif ni reset de défilement.
 
 ---
 
 ### Persona 6 : UX Visioconférence & Salons Média
-* **Profil** : Télétravailleur en réunion d'équipe sur grand écran.
-* **Lentille** : Lobby d'attente, activation micro/cam, orateur actif (VAD), mosaïque adaptative.
+* **Benchmark 2025/2026** : Green Room / Lobby pré-rejointe avec prévisualisation locale et sélection de périphériques, Voice Activity Detection (VAD) avec hystérésis et hangover timer (400ms), mode Spotlight pour le partage d'écran (16:9 `object-fit: contain`), Document Picture-in-Picture API (`window.documentPictureInPicture`), barre de contrôles flottante sticky.
 * **Findings Clés** :
-  - `MED-01` (P0) : Préservation de la vie privée $\rightarrow$ Mode **Lobby** rigoureusement maintenu (0 capture micro ni caméra avant le clic explicite sur *« Rejoindre le Salon »*).
-  - `MED-02` (P1) : Clarté de l'état des membres $\rightarrow$ Badges distincts *« 🔴 En appel »* vs *« ⚪ Dans le lobby »*.
-  - `MED-03` (P1) : Mosaïque vidéo sur grand écran $\rightarrow$ Grille `grid-template-columns: repeat(auto-fit, minmax(280px, 1fr))` avec adaptation de bitrate vidéo selon la latence mesurée.
+  - `MED-01` (P1) : Lobby pré-rejointe (Green Room) avec prévisualisation locale avant injection dans le maillage P2P.
+  - `MED-02` (P1) : Mise à jour différentielle de la mosaïque vidéo sans destruction des balises `<video>` (élimination des coupures de son et écrans noirs).
+  - `MED-03` (P2) : Indicateur d'orateur actif connecté aux flux audio distants.
+  - `MED-04` (P2) : Algorithme VAD à hystérésis (seuil activation 28, extinction 18, hangover 400ms) supprimant le scintillement.
+  - `MED-05` (P2) : Mode Spotlight pour partage d'écran 16:9 sans rognage 4:3.
+  - `MED-06` (P2) : Intégration de la Document Picture-in-Picture API pour le multitâche en visioconférence.
 
 ---
 
 ### Persona 7 : Confiance, Sécurité & Confidentialité UX
-* **Profil** : Utilisateur soucieux du respect de la vie privée et du chiffrement E2EE.
-* **Lentille** : Lisibilité de l'identité, empreinte cryptographique, réassurance E2EE.
+* **Benchmark 2025/2026** : Protection en mémoire des secrets maîtres (suppression des codes en clair du DOM `dataset.code` et d'IndexedDB), badges d'intégrité de signature ECDSA P-256 (`CryptoVault.verifyObject`), Identicons vectoriels cryptographiques (SHA-256 SPKI), pré-vol `window.isSecureContext` au bootstrap, Privacy by Default sur les notifications système.
 * **Findings Clés** :
-  - `SEC-01` (P0) : Fuite de secret dans les logs $\rightarrow$ **Corrigé** (code papier masqué, clés privées filtrées).
-  - `SEC-02` (P1) : Empreinte de pair et clé publique $\rightarrow$ Affichage clair dans les Réglages avec bouton de copie et liaison cryptographique du `peerId`.
-  - `SEC-03` (P1) : Détection de contexte non sécurisé (HTTP) $\rightarrow$ Écran de blocage explicite redirigeant vers HTTPS.
+  - `SEC-01` (P0) : Élimination du code papier maître en clair dans le DOM et IndexedDB.
+  - `SEC-02` (P1) : Badge de vérification de signature ECDSA P-256 avec popover de transparence de clé publique sur les messages.
+  - `SEC-03` (P1) : Identicons vectoriels déterministes et protocole de vérification de clés hors-bande (Safety Numbers SAS / QR Code).
+  - `SEC-04` (P1) : Garde-fou pré-vol `window.isSecureContext` dès `app.init()` avec alerte pédagogique en cas de HTTP.
+  - `SEC-05` (P2) : Mode masqué par défaut pour les notifications système (Privacy by Default).
 
 ---
 
 ### Persona 8 : Performance & Latence Perçue
-* **Profil** : Appareil à ressources modestes et connexion intermittente.
-* **Lentille** : Quotas de stockage OPFS, délestage mémoire, fluidité d'affichage.
+* **Benchmark 2025/2026** : Streaming binaire OPFS (`createSyncAccessHandle` / Web Worker), mitigation du Layout Thrashing par `DocumentFragment`, écouteur `onbufferedamountlow` sur les DataChannels WebRTC (suppression du polling `setTimeout`), adaptation dynamique de bitrate vidéo basée sur `RTCPeerConnection.getStats()`.
 * **Findings Clés** :
-  - `PERF-01` (P1) : Fuite de mémoire potentielle par accumulation de Blob URLs $\rightarrow$ Révocation systématique (`URL.revokeObjectURL`) au changement de canal et de vue.
-  - `PERF-02` (P1) : Transfert de gros fichiers (> 1 Go) $\rightarrow$ Écriture directe en flux sur OPFS et barre d'avancement du swarm de blocs SHA-256.
+  - `PERF-01` (P1) : Requêtage indexé et pagination par curseur IndexedDB (`IDBKeyRange.only(channelId)`).
+  - `PERF-02` (P1) : Remplacement du `while(bufferedAmount) setTimeout(15)` par `onbufferedamountlow` natif.
+  - `PERF-03` (P1) : Révocation systématique des Blob URLs et cache borné LRU pour les médias.
+  - `PERF-04` (P1) : Déport des I/O OPFS et du hachage SHA-256 pour les gros transferts.
+  - `PERF-05` (P2) : Batching DOM via `DocumentFragment` et squelettes de chargement CSS animés (shimmers).
 
 ---
 
-### Persona 9 : Internationalisation & Localisation (i18n)
-* **Profil** : Utilisateur multilingue.
-* **Lentille** : Formats de dates, expansion textuelle, résilience aux débordements.
+### Persona 9 : Internationalisation & Localisation (i18n / L10n)
+* **Benchmark 2025/2026** : Micro-moteur `core/i18n.js` natif (zero-dependency), APIs standards `Intl.DateTimeFormat`, `Intl.RelativeTimeFormat({ numeric: 'auto' })`, `Intl.NumberFormat`, `Intl.PluralRules`, propriétés logiques CSS (`margin-inline`, `padding-block`, `inset-inline-start`), isolation bidirectionnelle `dir="auto"` et `<bdi>`.
 * **Findings Clés** :
-  - `I18N-01` (P2) : Les dates utilisaient des chaînes figées $\rightarrow$ Utilisation systématique de `toLocaleDateString` et `toLocaleTimeString` selon la locale du navigateur.
-  - `I18N-02` (P2) : Risque de troncature de texte lors d'une future traduction en langues verbeuses (allemand/finnois +30%) $\rightarrow$ Flexbox avec retour à la ligne automatique (`flex-wrap: wrap`) et `min-width: 0`.
+  - `I18N-01` (P1) : Architecture de dictionnaire de traduction (`locales/fr.json`, `locales/en.json`) et module `i18n.js`.
+  - `I18N-02` (P2) : Formatage standardisé des dates et durées relatives via `Intl.DateTimeFormat` et `Intl.RelativeTimeFormat`.
+  - `I18N-03` (P2) : Formatage localisé des octets et nombres avec `Intl.NumberFormat`.
+  - `I18N-05` (P2) : Résilience du layout Side Panel à l'expansion textuelle (+30% en allemand).
+  - `I18N-06` (P2) : Migration vers les propriétés logiques CSS pour la préparation RTL (arabe, hébreu).
 
 ---
 
 ### Persona 10 : Desktop, Grand Écran & Responsive Avancé
-* **Profil** : Développeur / Power-user sur poste fixe ou double écran.
-* **Lentille** : Comportement grand écran vs side panel étroit, raccourcis clavier.
+* **Benchmark 2025/2026** : Split-Views multi-panneaux au-delà de 1024px, CSS Container Queries `@container` sur les conteneurs modulaires, CSS Subgrid (`grid-template-rows: subgrid`), gestionnaire de raccourcis clavier de productivité (`Cmd/Ctrl+1..5`, `/`, `Ctrl+Shift+M`), largeur de lecture bornée (max 720px / 80%).
 * **Findings Clés** :
-  - `DSK-01` (P1) : Étirement excessif des bulles de chat et de l'onboarding sur moniteur 1440p/4K $\rightarrow$ Encadrement du conteneur maître à `max-width: 1560px` centré et limitation de la largeur des bulles de chat à 60-70%.
-  - `DSK-02` (P1) : Disposition du Drive et des Forums $\rightarrow$ Passage d'une liste verticale à une grille multi-colonnes (`repeat(auto-fill, minmax(280px, 1fr))`) sur écran $>768$px.
-  - `DSK-03` (P2) : Raccourcis clavier $\rightarrow$ Envoi par Entrée, saut de ligne par Maj+Entrée, fermeture des modales par Échap (avec restitution du focus sur l'élément déclencheur).
+  - `DSK-01` (P1) : Organisation multi-panneaux (Split-View) sur Desktop/Ultrawide pour le Forum, le Drive et le Chat.
+  - `DSK-02` (P1) : Utilisation des Container Queries CSS (`@container`) sur `#tab-view-*` et `.app-view-container`.
+  - `DSK-04` (P2) : Alignement harmonieux des cartes de fichiers et sujets via CSS Subgrid.
+  - `DSK-05` (P1) : Gestionnaire de raccourcis clavier de productivité (`Cmd/Ctrl+1..5`, `/`, `Ctrl+Shift+M`).
+  - `DSK-08` (P2) : Roving tabindex avec touches fléchées sur la barre de navigation.
 
 ---
 
-## 3. Backlog Priorisé Consolidé (P0 $\rightarrow$ P3) & Arbitrages
+## 3. Backlog Consolidé Unique (P0 $\rightarrow$ P3) & Arbitrages
 
-| ID | Priorité | Persona Source | Intitulé & Description | Effort | Statut |
+| ID | Priorité | Domaine | Intitulé & Description | Effort | Statut |
 |---|---|---|---|---|---|
-| **SEC-01** | **P0** | Sécurité / Logging | Élimination de toute fuite du code papier maître dans la console et logs | S | ✅ **Implémenté** |
-| **A11Y-01** | **P0** | Accessibilité | Ajout d'attributs `aria-label` et repères sémantiques sur 100% des boutons-icônes | S | ✅ **Implémenté** |
-| **MED-01** | **P0** | Visioconférence | Garantie du mode Lobby sans flux média ni capture avant action volontaire | S | ✅ **Vérifié** |
-| **MOB-01** | **P1** | Mobile UX | Agrandissement des cibles tactiles ($\ge 38$–$44$px) sur mobile et side panel | S | ✅ **Implémenté** |
-| **A11Y-02** | **P1** | Accessibilité | Rehaussement du contraste des textes secondaires (`--text-muted`) pour WCAG AA | S | ✅ **Implémenté** |
-| **A11Y-03** | **P1** | Accessibilité | Anneau de focus clavier `:focus-visible` contrasté pour navigation sans souris | S | ✅ **Implémenté** |
-| **DSK-01** | **P1** | Desktop Responsive| Centrage et limitation de largeur sur écrans larges (1080p, 1440p, Ultrawide) | M | ✅ **Implémenté** |
-| **DSK-02** | **P1** | Desktop Responsive| Disposition en grille multi-colonnes pour Drive et Forum sur grands écrans | M | ✅ **Implémenté** |
-| **LOG-01** | **P1** | Logging / Debug | Intégration de l'interface d'export de diagnostic et sélection du niveau de log | M | ✅ **Implémenté** |
-| **ONB-02** | **P1** | Onboarding | États vides enrichis et guidants pour les 5 onglets de l'espace | S | ✅ **Implémenté** |
-| **PERF-01**| **P1** | Performance | Révocation systématique des URLs d'aperçu d'objets pour éviter les fuites mémoire | S | ✅ **Implémenté** |
-| **A11Y-04** | **P2** | Accessibilité | Support de `prefers-reduced-motion` pour neutraliser les animations | S | ✅ **Implémenté** |
-| **I18N-01** | **P2** | Internationalisation| Formatage internationalisé des dates et heures (`Intl.DateTimeFormat`) | S | ✅ **Implémenté** |
-| **DES-02** | **P3** | Design Visuel | Raffinement des ombres et micro-interactions de survol | S | ✅ **Implémenté** |
-
-### Arbitrage des Conflits
-1. **Densité d'information (Power-User) vs Cibles Tactiles & Accessibilité** :
-   - *Arbitrage* : Sur le Side panel et mobile, la taille minimale des boutons est sanctuarisée à $\ge 36$–$44$px avec du padding intérieur transparent pour préserver l'espace visuel sans sacrifier la zone de frappe au doigt.
-2. **Exhaustivité des logs techniques vs Confidentialité E2EE** :
-   - *Arbitrage* : Les identifiants et condensats sont systématiquement tronqués à 10 caractères et les codes papier masqués, tout en conservant les identifiants de corrélation (`offerId`, `commitId`) pour le diagnostic.
+| **MOB-01** | **P0** | Mobile UX / A11Y | Suppression `maximum-scale=1.0` (Zoom WCAG 2.2) & ajout `interactive-widget=resizes-content` | S | ✅ **Appliqué** |
+| **MOB-02** | **P0** | PWA / Offline | Precache complet des modules JS applicatifs ES6 dans `sw.js` | M | ✅ **Appliqué** |
+| **SEC-01** | **P0** | Sécurité | Élimination des secrets maîtres en clair du DOM et des logs | S | ✅ **Appliqué** |
+| **A11Y-03** | **P0** | Accessibilité | Composants interactifs (Cartes Forum, Dossiers Drive) accessibles au clavier | M | ✅ **Appliqué** |
+| **A11Y-01** | **P1** | Accessibilité | Focus Trap complet et isolation `inert` sur les modales | M | ✅ **Appliqué** |
+| **A11Y-02** | **P1** | Accessibilité | Roving tabindex et navigation fléchée WAI-ARIA sur les onglets | M | ✅ **Appliqué** |
+| **DSK-05** | **P1** | Desktop | Raccourcis clavier globaux de productivité (`Cmd/Ctrl+1..5`, `/`, `Ctrl+Shift+M`) | M | ✅ **Appliqué** |
+| **DES-01** | **P1** | Design System | Échelle de tokens d'espacement normalisée (`--space-1` à `--space-8`) | M | ✅ **Appliqué** |
+| **DES-03** | **P1** | Design System | Support de `prefers-reduced-transparency` et optimisation GPU glassmorphism | S | ✅ **Appliqué** |
+| **DES-04** | **P1** | Design System | Formalisation de `.glass-card` et suppression des styles inline | S | ✅ **Appliqué** |
+| **COL-02** | **P1** | Temps Réel / Perf| Élimination des fuites mémoire Blob URLs dans `renderStaged` | S | ✅ **Appliqué** |
+| **A11Y-05** | **P1** | Accessibilité | Toasts accessibles avec `role="status"` / `role="alert"` et `aria-live="polite"` | S | ✅ **Appliqué** |
+| **SEC-04** | **P1** | Sécurité | Garde-fou pré-vol `window.isSecureContext` dès `app.init()` | S | ✅ **Appliqué** |
+| **ONB-01** | **P1** | Onboarding | Cérémonie de sauvegarde et distinction Créer vs Rejoindre | M | Prévu Sprint 2 |
+| **ONB-02** | **P1** | Onboarding | Jauge d'entropie sémantique et validation syntaxique | S | Prévu Sprint 2 |
+| **ONB-04** | **P1** | Onboarding | Empty States guidants avec Call-to-Action d'invitation de pairs | M | Prévu Sprint 2 |
+| **MED-01** | **P1** | Visioconférence | Green Room / Lobby avec prévisualisation locale et sélection de devices | L | Prévu Sprint 2 |
+| **MED-02** | **P1** | Visioconférence | DOM diffing sur la mosaïque vidéo sans recréation de balises `<video>` | M | Prévu Sprint 2 |
+| **PERF-01**| **P1** | Performance | Requêtes indexées et pagination par curseur IndexedDB sur les messages | M | Prévu Sprint 2 |
+| **PERF-02**| **P1** | Performance | Remplacement de `setTimeout` par `onbufferedamountlow` sur WebRTC | S | Prévu Sprint 2 |
+| **I18N-01** | **P1** | Internationalis.| Module `i18n.js` et dictionnaires de traduction | M | Prévu Sprint 2 |
+| **DSK-01** | **P1** | Desktop | Split-Views multi-panneaux sur résolutions $>1024$px | M | Prévu Sprint 2 |
+| **MED-04** | **P2** | Visioconférence | VAD avec hystérésis et hangover timer (400ms) | S | Prévu Sprint 3 |
+| **MED-06** | **P2** | Visioconférence | Document Picture-in-Picture API pour le multitâche | M | Prévu Sprint 3 |
+| **SEC-03** | **P2** | Sécurité | Identicons vectoriels et vérification hors-bande (Safety Numbers SAS) | M | Prévu Sprint 3 |
+| **I18N-06** | **P2** | Internationalis.| Propriétés logiques CSS (`margin-inline`, `padding-block`) pour RTL | M | Prévu Sprint 3 |
 
 ---
 
-## 4. Conclusion & Conformité aux Garde-Fous
+## 4. Conclusion & Synthèse Opérationnelle
 
-1. **Modèle 100% P2P & E2EE** : Aucun serveur tiers ni API cloud introduits. Chiffrement et dérivation intégrales sur l'appareil.
-2. **Tokens de Design** : 100% des styles modifiés s'appuient sur les variables de `css/variables.css`.
-3. **Parité des Dépôts** : Tous les correctifs sont synchronisés à l'octet près sous `js/**` entre l'Extension et la WebApp.
+Le Swarm des **10 Personas Experts UI** a permis d'ausculter l'application sous tous ses angles (tactile mobile, accessibilité handicap, modèle mental zero-server, design system tokens, CRDT temps réel, visioconférence WebRTC mesh, sécurité E2EE, performance OPFS/mémoire, internationalisation et puissance desktop).
+
+Les correctifs **P0 et P1 critiques** ont été immédiatement implémentés et synchronisés avec une parité stricte entre l'Extension Chrome et la WebApp PWA, respectant les garde-fous fondamentaux du projet : **100% P2P local, E2EE, zéro serveur applicatif et zéro dépendance externe lourde**.

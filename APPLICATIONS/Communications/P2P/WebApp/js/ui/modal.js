@@ -1,75 +1,141 @@
 import { logger } from '../core/logger.js';
 /**
- * Gestionnaire de Fenêtres Modales Accessibles
- * - Fermeture par bouton [data-close-modal]
- * - Fermeture par touche Échap
- * - Fermeture par clic sur l'arrière-plan (overlay)
- * - Focus automatique sur le premier champ, restauration du focus à la fermeture
+ * Gestionnaire de Boîtes Modales Accessible (WCAG 2.2 / WAI-ARIA Dialog Pattern)
+ * Supporte les ouvertures empilées, la fermeture au clic sur le fond dépoli,
+ * la touche Échap, le confinement du focus (Focus Trap) et l'isolation inert.
  */
 
 export class Modal {
   static _openStack = [];
-  static _globalBound = false;
   static _lastFocused = null;
+  static _initialized = false;
 
+  /**
+   * Ouvre une boîte modale par son ID
+   */
   static open(modalId) {
     const modal = document.getElementById(modalId);
-    if (!modal) return;
-    modal.classList.add('modal-active');
-    document.body.classList.add('modal-open');
-    Modal._lastFocused = document.activeElement;
-    if (!Modal._openStack.includes(modalId)) Modal._openStack.push(modalId);
-
-    // Focus sur le premier champ interactif (confort clavier).
-    const focusable = modal.querySelector('input, textarea, select, button:not(.modal-close-btn)');
-    if (focusable) setTimeout(() => { try { focusable.focus(); } catch (e) { logger.debug('App', 'Erreur focus modal:', e); } }, 60);
+    if (!modal) {
+      logger.warn('Modal', `Modale "${modalId}" introuvable dans le DOM.`);
+      return;
+    }
 
     Modal._ensureGlobalHandlers();
-  }
+    Modal._lastFocused = document.activeElement;
 
-  static close(modalId) {
-    const modal = document.getElementById(modalId);
-    if (modal) modal.classList.remove('modal-active');
-    Modal._openStack = Modal._openStack.filter(id => id !== modalId);
-    if (Modal._openStack.length === 0) document.body.classList.remove('modal-open');
-    if (Modal._lastFocused && typeof Modal._lastFocused.focus === 'function') {
-      try { Modal._lastFocused.focus(); } catch (e) { logger.debug('App', 'Erreur restore focus modal:', e); }
+    modal.classList.add('modal-active');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('modal-open');
+
+    // Isolation de l'arrière-plan avec inert (Accessibilité)
+    const mainApp = document.getElementById('view-main-app');
+    const authView = document.getElementById('view-auth');
+    if (mainApp) mainApp.setAttribute('inert', '');
+    if (authView) authView.setAttribute('inert', '');
+
+    if (!Modal._openStack.includes(modalId)) {
+      Modal._openStack.push(modalId);
+    }
+
+    // Déplacement accessible du focus dans la modale
+    const focusables = Modal.getFocusableElements(modal);
+    if (focusables.length > 0) {
+      setTimeout(() => {
+        try { focusables[0].focus(); } catch (e) { logger.debug('Modal', 'Erreur focus modal:', e); }
+      }, 50);
     }
   }
 
+  /**
+   * Ferme une modale par son ID
+   */
+  static close(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) {
+      modal.classList.remove('modal-active');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+
+    Modal._openStack = Modal._openStack.filter(id => id !== modalId);
+
+    if (Modal._openStack.length === 0) {
+      document.body.classList.remove('modal-open');
+      const mainApp = document.getElementById('view-main-app');
+      const authView = document.getElementById('view-auth');
+      if (mainApp) mainApp.removeAttribute('inert');
+      if (authView) authView.removeAttribute('inert');
+    }
+
+    // Restauration du focus sur l'élément d'origine
+    if (Modal._lastFocused && typeof Modal._lastFocused.focus === 'function') {
+      try {
+        Modal._lastFocused.focus();
+      } catch (e) {
+        logger.debug('Modal', 'Erreur restore focus modal:', e);
+      }
+    }
+  }
+
+  /**
+   * Ferme la dernière modale ouverte
+   */
   static closeTop() {
-    const top = Modal._openStack[Modal._openStack.length - 1];
-    if (top) Modal.close(top);
+    if (Modal._openStack.length > 0) {
+      const topId = Modal._openStack[Modal._openStack.length - 1];
+      Modal.close(topId);
+    }
   }
 
+  /**
+   * Récupère la liste des éléments recevant le focus clavier
+   */
+  static getFocusableElements(container) {
+    return Array.from(container.querySelectorAll(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter(el => el.offsetParent !== null);
+  }
+
+  /**
+   * Enregistre les gestionnaires d'événements globaux
+   */
   static _ensureGlobalHandlers() {
-    if (Modal._globalBound) return;
-    Modal._globalBound = true;
+    if (Modal._initialized) return;
+    Modal._initialized = true;
 
-    // Échap ferme la modale du dessus.
+    // Fermeture avec Échap et Focus Trap avec Tab / Shift+Tab
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && Modal._openStack.length > 0) {
+      if (Modal._openStack.length === 0) return;
+      const topModalId = Modal._openStack[Modal._openStack.length - 1];
+      const modal = document.getElementById(topModalId);
+      if (!modal) return;
+
+      if (e.key === 'Escape') {
         e.preventDefault();
-        Modal.closeTop();
+        Modal.close(topModalId);
+      } else if (e.key === 'Tab') {
+        const focusables = Modal.getFocusableElements(modal);
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     });
 
-    // Clic sur l'arrière-plan (hors contenu) ferme la modale.
-    document.addEventListener('mousedown', (e) => {
-      const overlay = e.target.closest ? e.target.closest('.modal-overlay.modal-active') : null;
-      if (overlay && e.target === overlay) {
-        Modal.close(overlay.id);
+    // Délégation de fermeture sur les boutons et overlays
+    document.addEventListener('click', (e) => {
+      if (e.target.matches('[data-close-modal]') || e.target.closest('[data-close-modal]')) {
+        const modal = e.target.closest('.modal-overlay');
+        if (modal && modal.id) Modal.close(modal.id);
+      } else if (e.target.classList.contains('modal-overlay')) {
+        Modal.close(e.target.id);
       }
     });
-  }
-
-  static setupCloseTriggers() {
-    document.querySelectorAll('[data-close-modal]').forEach(el => {
-      el.addEventListener('click', () => {
-        const modal = el.closest('.modal-overlay');
-        if (modal) Modal.close(modal.id);
-      });
-    });
-    Modal._ensureGlobalHandlers();
   }
 }

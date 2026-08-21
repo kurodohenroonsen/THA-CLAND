@@ -224,6 +224,7 @@ class P2PApp {
       const isTarget = btn.getAttribute('data-tab') === tabName;
       btn.classList.toggle('active', isTarget);
       btn.setAttribute('aria-selected', isTarget ? 'true' : 'false');
+      btn.setAttribute('tabindex', isTarget ? '0' : '-1'); // Roving tabindex
     });
 
     // Affichage de la vue correspondante

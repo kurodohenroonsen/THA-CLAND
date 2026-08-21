@@ -302,3 +302,34 @@ textarea.form-control {
   font-size: 32px;
   margin-bottom: 4px;
 }
+
+/* Composant Carte Dépolie Standardisé (.glass-card) */
+.glass-card {
+  background: var(--bg-glass-card);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: 18px;
+  contain: paint;
+  isolation: isolate;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.glass-card:hover {
+  border-color: var(--border-glow);
+}
+
+/* Accessibilité & Performance GPU : Réduction de la transparence */
+@media (prefers-reduced-transparency: reduce) {
+  .glass-card,
+  .app-header,
+  .modal-content,
+  .chat-header-bar,
+  .chat-input-area {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background-color: var(--bg-secondary) !important;
+  }
+}
