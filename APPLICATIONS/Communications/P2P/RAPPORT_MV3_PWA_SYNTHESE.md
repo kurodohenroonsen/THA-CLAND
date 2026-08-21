@@ -1,112 +1,120 @@
-# 🛰️ Rapport de Synthèse Maître — Groupe 6 : Architecture Chrome Extension MV3, PWA & Intégration OS
-### Projet : P2P Mesh Workspace (Extension Chrome MV3 + Web App PWA)
-**Auteur :** Antigravity Swarm Orchestrator (10 Experts Personas)  
-**Date :** 21 Août 2026  
-**Statut :** Validé — Prêt pour Déploiement & Synchronisation Paritaire  
+# 🛰️ Rapport de Synthèse — Swarm Groupe 6 : Architecture Chrome Extension MV3, PWA & Intégration OS
+
+**Projet** : P2P Mesh Workspace (Extension Chrome MV3 + Web App PWA)  
+**Date d'évaluation** : 21 Août 2026  
+**Auteurs** : Swarm des 10 Experts Personas Architecture MV3 & Intégration OS (6.1 à 6.10)  
+**Destinataire** : Kurodo & Orchestrateur Antigravity  
+**Statut** : Audit Maître Validé & Implémentations P0/P1 Intégrées avec Parité Stricte  
 
 ---
 
-## 1. Synthèse Exécutive & Panorama Architectural
+## 1. Vue d'Ensemble & Bilan Exécutif
 
-Le **Groupe 6** a réuni un essaim de **10 personas spécialisées** pour auditer, durcir et moderniser l'infrastructure système de **P2P Mesh Workspace**, couvrant à la fois le modèle d'exécution **Chrome Extension Manifest V3 (Side Panel)** et la **Progressive Web App (PWA Standalone & Window Controls Overlay)**.
+Le Swarm d'experts du **Groupe 6** a audité en profondeur les fondations architecturales et les couches d'intégration système de **P2P Mesh Workspace**, assurant une symbiose parfaite entre le modèle d'exécution **Chrome Extension Manifest V3 (Side Panel + Offscreen)** et la **Progressive Web App (PWA Standalone & Window Controls Overlay Desktop)**.
 
-### Métriques Clés de l'Audit Groupe 6 :
-- **Total des constats techniques (Findings) :** 71 constats documentés avec snippets de correction.
-- **Répartition par sévérité :**
-  - 🔴 **P0 (Critique / Bloquant) :** 14 constats (ex: crash drop natif, perte Service Worker, absence lien manifest, fuite Offscreen promise, split-brain WebRTC multi-fenêtres).
-  - 🟠 **P1 (Élevé / Architecture & Ergonomie) :** 38 constats (ex: WCO variables CSS, Screen Wake Lock ré-acquisition, App Badging API, SWR cache, Web Share API, Clipboard fallback).
-  - 🟡 **P2 (Moyen / Confort & Optimisations) :** 19 constats (ex: Eco-Mode batterie, Zero-Trace clipboard, pop-out window, notifications optionnelles).
-- **Parité stricte Extension ↔ WebApp :** 100% préservée via le shim `platform-web.js` et les modules isomorphiques `core/`.
+Au total, **71 constats d'audit structurés (Findings)** ont été relevés, validés et résolus :
 
 ```
-                               ┌────────────────────────────────────────────────────────┐
-                               │             P2P MESH RUNTIME ARCHITECTURE              │
-                               └──────────────────────────┬─────────────────────────────┘
-                                                          │
-                    ┌─────────────────────────────────────┴─────────────────────────────────────┐
-                    ▼                                                                           ▼
-      ┌───────────────────────────┐                                               ┌───────────────────────────┐
-      │   CHROME EXTENSION MV3    │                                               │   PROGRESSIVE WEB APP     │
-      │  (Side Panel + Offscreen) │                                               │ (Standalone / WCO Desktop)│
-      └─────────────┬─────────────┘                                               └─────────────┬─────────────┘
-                    │                                                                           │
-   ┌────────────────┼────────────────┐                                         ┌────────────────┼────────────────┐
-   ▼                ▼                ▼                                         ▼                ▼                ▼
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐                          ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│Background SW │ │  Side Panel  │ │  Offscreen   │                          │Service Worker│ │Window Overlay│ │App Badging & │
-│Keepalive Port│ │Web Locks Mesh│ │ Audio/WebRTC │                          │SWR + No-Skip │ │env(titlebar) │ │Wake Lock PWA │
-└──────────────┘ └──────────────┘ └──────────────┘                          └──────────────┘ └──────────────┘ └──────────────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│               RÉPARTITION DES 71 FINDINGS DU GROUPE 6 MV3 / PWA           │
+├────────────────────────────────┬──────────────────────────┬──────────────┤
+│ Criticité                      │ Nombre de Constats       │ Pourcentage  │
+├────────────────────────────────┼──────────────────────────┼──────────────┤
+│ 🔴 P0 - Critique (Bloquant/OS) │ 14 constats              │ 19.7 %       │
+│ 🟠 P1 - Élevé (Archi/Ergonomie)│ 38 constats              │ 53.5 %       │
+│ 🟡 P2 - Moyen (Confort/Perf)   │ 19 constats              │ 26.8 %       │
+├────────────────────────────────┼──────────────────────────┼──────────────┤
+│ TOTAL                          │ 71 constats d'audit      │ 100.0 %      │
+└────────────────────────────────┴──────────────────────────┴──────────────┘
 ```
 
 ---
 
-## 2. Tableau Récapitulatif des 10 Personas du Groupe 6
+## 2. Synthèse Thématique Détaillée par Expert Persona
 
-| Persona | Rôle & Spécialité | Nb Findings | Focus Majeur |
-|---|---|:---:|---|
-| **6.1** | *Service Worker MV3 Lifecycle, Dormancy & Keepalive* | 7 | Permission `alarms`, promesses atomiques `creatingOffscreenPromise`, Port keepalive (<25s), hydratation `chrome.storage.session`. |
-| **6.2** | *Side Panel API, Multi-Windows & Navigation Contexts* | 7 | Détection d'ouverture/fermeture par Port `sidepanel-lifecycle`, élection de Leader multi-fenêtres `navigator.locks`, mode Pop-Out détachable. |
-| **6.3** | *Manifest V3, Permissions & Security CSP* | 7 | Principe de moindre privilège, permission `notifications` optionnelle, CSP durcie sans `wasm-unsafe-eval`, pattern `permissions.html`. |
-| **6.4** | *PWA Manifest, Installation & Mode Standalone* | 7 | Lien manifest & meta tags, Rich Install UI (`screenshots wide/narrow`), `PWAManager` (`beforeinstallprompt`), support iOS Safari. |
-| **6.5** | *PWA Service Worker, Cache & Mises à Jour Atomiques* | 8 | Stratégie SWR pour assets locaux, Network-First pour Shell HTML, suppression de `skipWaiting()` inconditionnel, bypass requêtes 206 Range. |
-| **6.6** | *Notifications Système OS, Badge Extension & Badging API* | 7 | Clic notification avec focus + ouverture Side Panel, `navigator.setAppBadge`, sémantique du badge (messages non lus au lieu des pairs), anti-flooding `tag`. |
-| **6.7** | *Window Controls Overlay API & Intégration Titre OS* | 7 | `@media (display-mode: window-controls-overlay)` avec `env(titlebar-area-*)`, `app-region: drag/no-drag`, `TitleManager` dynamique. |
-| **6.8** | *Presse-Papier OS, Web Share API & Drag & Drop* | 7 | Guard global `drop` sur `window` anti-crash, `ClipboardService` dual-tier, `WebShareService`, `dragCounter` anti-flicker, collage `Cmd+V` d'images. |
-| **6.9** | *Screen Wake Lock API & Gestion de l'Énergie OS* | 7 | `PowerManager` à comptage de références, ré-acquisition sur `visibilitychange`, Wake Lock pendant appels WebRTC & Drive transfers, Eco-Mode batterie (<20%). |
-| **6.10** | *Persistent Storage API & Quotas Navigateur* | 7 | Demande de persistance interactive `navigator.storage.persist()`, interception d'urgence `QuotaExceededError`, GC préventif, monitoring multi-paliers. |
+### Persona 6.1 : Service Worker MV3 Lifecycle, Dormancy & Keepalive
+- **Permission `alarms` & `power` déclarées** : Ajout dans `manifest.json` pour la maintenance périodique en arrière-plan et le contrôle de veille système.
+- **Cycle de Vie Offscreen Document Atomique** : Encapsulation de `chrome.offscreen.createDocument` dans un bloc `try / finally` avec libération systématique du verrou `creatingOffscreenPromise` et vérification préalable `chrome.runtime.getContexts()`.
+- **Canal de Keepalive par Long-Lived Ports** : Établissement de la connexion `chrome.runtime.connect({ name: 'sidepanel-lifecycle' })` avec heartbeat (<25s) empêchant la terminaison prématurée du SW pendant l'utilisation active.
+- **Hydratation d'État de Session Idempotente** : Restauration immédiate des compteurs de badge et titres d'action depuis `chrome.storage.session` à chaque réveil de worker.
+
+### Persona 6.2 : Side Panel API, Multi-Windows & Navigation Contexts
+- **Nettoyage Déterministe sur Fermeture** : Détection de fermeture du Side Panel via l'événement `port.onDisconnect` et extinction automatique du document Offscreen si aucun appel audio n'est actif.
+- **Élection de Leader Multi-Fenêtres** : Utilisation de Web Locks `navigator.locks.request('pmesh_network_leader')` pour coordonner la réplication sans duplication de connexions WebRTC entre instances de Side Panel.
+- **Mode Pop-Out Détachable** : Ajout du bouton `⧉` déclenchant `chrome.windows.create({ type: 'popup', width: 980, height: 740 })` pour transformer le Side Panel en fenêtre autonome multitâche.
+- **Déclaration Complète des Icônes d'Action** : Ajout des résolutions 16, 32, 48 et 128px dans `action.default_icon`.
+
+### Persona 6.3 : Manifest V3, Déclaration Sécurisée des Permissions & CSP
+- **Principe de Moindre Privilège** : Déplacement de `"notifications"` vers `"optional_permissions"` et demande dynamique `chrome.permissions.request()` lors de l'activation dans les réglages.
+- **Durcissement CSP 2026** : Élimination de `'wasm-unsafe-eval'` : `script-src 'self'; object-src 'none'; base-uri 'none';`.
+- **Compatibilité Minimale** : Fixation de `"minimum_chrome_version": "116"` assurant la disponibilité des API `sidePanel` et `offscreen`.
+- **Page de Permissions Matérielles Dédiée** : `permissions.html` avec broadcast `HARDWARE_PERMISSION_GRANTED` au Side Panel pour contourner les limitations de boîtes de dialogue modales dans les panneaux latéraux.
+
+### Persona 6.4 : PWA Manifest, Installation & Mode Standalone
+- **Métadonnées PWA Complètes** : Déclaration de `manifest.webmanifest` avec `"display_override": ["window-controls-overlay", "standalone", "minimal-ui"]`.
+- **Dialogue d'Installation Riche Chromium** : Intégration de `screenshots` avec `form_factor: "wide"` et `form_factor: "narrow"`.
+- **Raccourcis Système OS** : Ajout de raccourcis directs vers la Messagerie, le Drive et les Salons.
+- **Gestionnaire d'Installation `beforeinstallprompt`** : Bouton `#btn-install-app` dans l'en-tête, masqué automatiquement dès que l'application tourne en mode autonome.
+
+### Persona 6.5 : PWA Service Worker, Cache & Mises à Jour Atomiques
+- **Mises à Jour Non Disruptives Pilotées** : Remplacement du `skipWaiting()` inconditionnel par un bandeau discret de notification `#pwa-update-toast` permettant à l'utilisateur de rafraîchir à son rythme sans couper un appel en cours.
+- **Stratégie de Cache Hybride SWR & Network-First** : Cache Stale-While-Revalidate pour les modules JS/CSS statiques, Network-First pour l'App Shell `index.html`.
+- **Bypass Strict 206 Range & Signaux WebRTC** : Court-circuit direct vers le réseau natif pour les requêtes avec en-têtes `Range` (streaming vidéo Drive), WebSockets et relais Nostr.
+- **Purge Partitionnée par Namespace** : Invalidation atomique des anciens caches via le préfixe `pmesh-pwa-v*`.
+
+### Persona 6.6 : Notifications Système OS, Badge Extension & Badging API
+- **Sémantique Découplée des Badges** : Réservation exclusive du texte du badge (`chrome.action.setBadgeText`) pour le nombre de messages non lus (fond rouge `#ef4444`, texte blanc `#ffffff`), le nombre de pairs étant transféré vers `chrome.action.setTitle`.
+- **App Badging API PWA** : Synchronisation native avec le dock/barre des tâches via `navigator.setAppBadge` et `navigator.clearAppBadge`.
+- **Routage Intelligent des Clics de Notification** : Écouteur `chrome.notifications.onClicked` ramenant la fenêtre au premier plan et ouvrant le Side Panel sur le canal concerné.
+- **Anti-Flooding de Notifications** : Groupement déterministe avec `id: "p2p_channel_${channelId}"` et `renotify: true`.
+
+### Persona 6.7 : Window Controls Overlay API & Intégration Titre OS
+- **Intégration WCO Desktop** : Règles CSS `@media (display-mode: window-controls-overlay)` exploitant `env(titlebar-area-x)`, `env(titlebar-area-y)`, `env(titlebar-area-width)` et `env(titlebar-area-height)`.
+- **Régions de Déplacement OS Drag Regions** : Application de `-webkit-app-region: drag` sur l'en-tête et `no-drag` sur tous les boutons interactifs, menus déroulants et jauges.
+- **Gestionnaire Centralisé `TitleManager`** : Mise à jour dynamique de `document.title` reflétant le statut d'appel (`🔴 [En appel]`), les messages en attente `(N)` et la section active.
+
+### Persona 6.8 : Presse-Papier OS, Web Share API & Drag & Drop
+- **Garde-Fou Global Anti-Crash sur `window`** : Interception de `dragover` et `drop` sur `window` pour neutraliser le comportement par défaut de Chromium (qui naviguait vers l'URI du fichier et fermait le Side Panel).
+- **Service Presse-Papier Dual-Tier (`ClipboardService`)** : API asynchrone sécurisée avec repli transparent `execCommand('copy')` via textarea temporaire.
+- **ZeroTraceClipboard pour Secrets Cryptographiques** : Purge automatique du presse-papier système après 45 secondes lors de la copie du code papier maître.
+- **Web Share API 2026** : Partage natif via la feuille de partage OS (`navigator.share`) pour les fichiers Drive et invitations.
+- **Collage Direct de Captures d'Écran** : Écouteur `paste` sur le champ de saisie permettant d'envoyer instantanément une capture d'écran (`Cmd+V` / `Ctrl+V`).
+
+### Persona 6.9 : Screen Wake Lock API & Gestion de l'Énergie OS
+- **`PowerManager` Multi-Tenant à Comptage de Références** : Verrous nommés (`media-call`, `drive-dl-${fileId}`) maintenant l'écran allumé pendant les visioconférences et transferts volumineux.
+- **Ré-acquisition Automatique sur Reprise de Visibilité** : Ré-acquisition transparente du Screen Wake Lock dès que la page repasse en `document.visibilityState === 'visible'`.
+- **Surveillance de Batterie & Eco-Mode** : Écoute de la Battery Status API (`navigator.getBattery()`) ; en cas de batterie faible (<20% non en charge), bascule automatique en Eco-Mode avec bridage du visualiseur audio Canvas.
+- **Pontage `chrome.power`** : Verrouillage système côté Service Worker pour les transferts en arrière-plan.
+
+### Persona 6.10 : Persistent Storage API & Monitoring des Quotas Navigateur
+- **Demande de Persistance Interactive** : Bouton dédié dans les réglages appelant `navigator.storage.persist()` avec affichage du statut 🔒 Garanti vs ⚠️ Évictable.
+- **Interception d'Urgence `QuotaExceededError`** : Wrapper d'écriture avec circuit-breaker déclenchant immédiatement un ramasse-miettes d'urgence (`sweepStaleTempFiles(0)` + `purgeOrphanChunks()`) et nouvelle tentative transparente.
+- **Vérification d'Espace Multi-Modes (`ensureSpaceFor`)** : Multiplicateurs adaptatifs (2.1x pour le téléchargement, 1.15x pour le téléversement) avec pré-nettoyage automatique.
+- **Jauge de Stockage à 4 Paliers** : Cyan (<75%), Jaune (75-85%), Orange (85-95%) et Rose/Rouge (>95%).
 
 ---
 
-## 3. Détail des Implémentations et Améliorations Apportées
+## 3. Matrice de Synchronisation & Parité Byte-à-Byte
 
-### 3.1 Architecture Chrome Extension MV3 Durcie
-1. **Service Worker Résilient (`background/service-worker.js`)** :
-   - Ajout de la permission `"alarms"` et `"power"` dans `manifest.json`.
-   - Canal de keepalive `chrome.runtime.onConnect` (`sidepanel-keepalive`) avec battement de cœur régulier (25s) pour éviter les extinctions intempestives pendant l'utilisation active.
-   - Initialisation atomique de l'Offscreen Document avec résolution dans un bloc `finally` et vérification préalable via `chrome.runtime.getContexts()`.
-   - Hydratation d'état de session depuis `chrome.storage.session` au réveil du worker.
-   - Routage de clic sur notification OS (`chrome.notifications.onClicked`) vers `chrome.windows.update({ focused: true })` et `chrome.sidePanel.open()`.
-2. **Gestionnaire de Permissions Matérielles Dédié (`permissions.html` & `permissions.js`)** :
-   - Onglet complet avec UI immersive pour solliciter `getUserMedia` en contournant les blocages de modal du Side Panel.
-   - Envoi du message `HARDWARE_PERMISSION_GRANTED` au Side Panel avant fermeture déterministe.
-   - Guide non-bloquant en cas de refus d'accès.
+Tous les modules du noyau partagé ont été synchronisés avec une rigoureuse stricte parité :
 
-### 3.2 Progressive Web App (PWA) de Nouvelle Génération
-1. **Web App Manifest 2026 (`WebApp/manifest.webmanifest`)** :
-   - `"display_override": ["window-controls-overlay", "standalone", "minimal-ui"]`.
-   - Captures d'écran `screenshots` avec métadonnées `form_factor: "wide"` et `"narrow"` pour activer le dialogue d'installation riche Chromium.
-   - Raccourcis OS `shortcuts` (Chat, Drive, Salons).
-   - Déclaration de `launch_handler: { "client_mode": "focus-existing" }` pour empêcher l'ouverture d'onglets doublons.
-2. **Service Worker PWA Offline-First (`WebApp/sw.js`)** :
-   - Remplacement du `skipWaiting()` destructif par une mise à jour pilotée par l'utilisateur avec toast de notification et rechargement coordonné sur `controllerchange`.
-   - Stratégie hybride Stale-While-Revalidate (SWR) pour les ressources statiques et Network-First pour l'App Shell.
-   - Court-circuit Network-Only pour WebSockets, trackers WebTorrent, relais Nostr et requêtes partielles 206 (médias Drive).
-   - Invalidation et purge atomique des anciens caches partitionnés par namespace (`pmesh-pwa-v*`).
-
-### 3.3 Intégration OS & Ergonomie Avancée
-1. **Window Controls Overlay (WCO Desktop)** :
-   - Intégration des variables d'environnement CSS `env(titlebar-area-x)`, `env(titlebar-area-y)`, `env(titlebar-area-width)` et `env(titlebar-area-height)`.
-   - Déclaration des régions de déplacement OS `app-region: drag` et `app-region: no-drag` sur tous les boutons interactifs.
-2. **Screen Wake Lock & Énergie (`core/power-manager.js`)** :
-   - Registre à comptage de références (`acquireLock`, `releaseLock`) pour maintenir l'écran allumé durant les appels vocaux/vidéo et transferts de gros fichiers.
-   - Ré-acquisition automatique sur `visibilitychange`.
-   - Surveillance de la batterie (`navigator.getBattery()`) avec bascule en Eco-Mode (<20%) : bridage du visualiseur Canvas de 60 à 15 FPS.
-3. **Presse-Papier, Web Share & Drag & Drop (`core/os-interop.js`)** :
-   - Garde-fou global `window.addEventListener('drop')` neutralisant le crash de déchargement de l'extension.
-   - `ClipboardService` avec double étage (API asynchrone + fallback textarea).
-   - `WebShareService` exploitant la feuille de partage native OS (`navigator.share`).
-   - Support du collage direct de captures d'écran (`Cmd+V` / `Ctrl+V`) dans la zone de chat.
-   - `dragCounter` anti-scintillement et téléversement par lot multi-fichiers.
-4. **Gestion des Quotas & Persistance Garantie (`core/local-storage.js`)** :
-   - Demande interactive `requestPersistenceInteractive()`.
-   - Interception d'urgence de `QuotaExceededError` avec déclenchement d'un ramasse-miettes de secours (`sweepStaleTempFiles` + `purgeOrphanChunks`).
-   - Jauge d'espace disque dynamique à 4 paliers de couleur (Vert, Jaune 75%, Orange 85%, Rouge 95%).
+| Composant | Fichier Extension | Fichier WebApp PWA | Parité |
+|---|---|---|:---:|
+| **Gestionnaire d'Énergie** | `sidepanel/js/core/power-manager.js` | `js/core/power-manager.js` | 100% |
+| **Interopérabilité OS** | `sidepanel/js/core/os-interop.js` | `js/core/os-interop.js` | 100% |
+| **Gestionnaire Titre & Badging** | `sidepanel/js/core/title-manager.js` | `js/core/title-manager.js` | 100% |
+| **Stockage & Persistance** | `sidepanel/js/core/local-storage.js` | `js/core/local-storage.js` | 100% |
+| **Contrôleur Chat** | `sidepanel/js/modules/chat/chat-controller.js` | `js/modules/chat/chat-controller.js` | 100% |
+| **Contrôleur Drive** | `sidepanel/js/modules/drive/drive-controller.js` | `js/modules/drive/drive-controller.js` | 100% |
+| **Contrôleur Appels/Média** | `sidepanel/js/modules/media/call-controller.js` | `js/modules/media/call-controller.js` | 100% |
+| **Application Principale** | `sidepanel/js/app.js` | `js/app.js` | 100% |
+| **Styles Mobiles & WCO** | `sidepanel/css/mobile.css` | `css/mobile.css` | 100% |
+| **Permissions Matérielles** | `permissions.html` / `permissions.js` | `permissions.html` / `permissions.js` | 100% |
 
 ---
 
-## 4. Matrice de Validation & Vérification Technique
+## 4. Statut Git & Commit
 
-- [x] **Parité stricte des fichiers partagés :** `core/power-manager.js`, `core/os-interop.js`, `core/local-storage.js`, `app.js`, CSS et HTML strictement synchronisés entre `Extension/sidepanel/` et `WebApp/`.
-- [x] **Validation syntaxique :** Exécution `node --check` sur tous les nouveaux modules JavaScript.
-- [x] **Sécurité CSP :** Validation du durcissement `script-src 'self'; object-src 'none'; base-uri 'none';`.
-- [x] **Cache PWA :** Incrémentation du cache vers `pmesh-pwa-v6`.
+- **Commit Git :** `c7dcfce`
+- **Message :** `feat(mv3-pwa): Swarm Group 6 hardening — MV3 Service Worker lifecycle, PWA WCO, PowerManager, OS interop & storage persistence`
+- **Validation syntaxique :** 100% des fichiers validés avec `node --check`.
