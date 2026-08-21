@@ -5,6 +5,8 @@ import { AudioVisualizer } from './audio-visualizer.js';
 import { SpatialAudioEngine } from './spatial-audio.js';
 import { Toast } from '../../ui/toast.js';
 import { CONFIG } from '../../core/config.js';
+import { powerManager } from '../../core/power-manager.js';
+import { titleManager } from '../../core/title-manager.js';
 
 /**
  * Contrôleur des Appels Vocaux & Vidéo Mesh P2P (Standard 2025/2026)
@@ -298,6 +300,10 @@ export class CallController {
       this.isMuted = false;
       this.presence.broadcastMediaStatus(true, true, false);
 
+      // Maintien d'activité (Screen Wake Lock) & Titre OS dynamique
+      powerManager.acquireLock('media-call', 'Salon Audio/Vidéo P2P actif');
+      titleManager.setCallState({ active: true, muted: false, roomName: 'Salon Audio/Vidéo' });
+
       this.startBitrateAdaptation();
       this.updateCallUI();
       this.updateVideoGrid();
@@ -391,6 +397,7 @@ export class CallController {
     }
 
     this.presence.broadcastMediaStatus(this.isInCall, !this.isMuted, this.isVideoActive);
+    titleManager.setCallState({ active: this.isInCall, muted: this.isMuted, roomName: 'Salon Audio/Vidéo' });
     this.updateVideoGrid();
   }
 
@@ -644,6 +651,9 @@ export class CallController {
     }
 
     this.presence.broadcastMediaStatus(false, false, false);
+    powerManager.releaseLock('media-call');
+    titleManager.setCallState({ active: false, muted: false, roomName: '' });
+
     this.announceA11y('Vous avez quitté le salon');
     this.updateCallUI();
     this.updateVideoGrid();

@@ -3,6 +3,7 @@
   "name": "P2P Mesh - Espace Collaboratif Décentralisé",
   "version": "1.1.0",
   "description": "Plateforme collaborative 100% Peer-to-Peer : Chatrooms, Forums répliqués, Drive partagé avec versioning, et Appels Audio/Vidéo Mesh sans serveur.",
+  "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -10,7 +11,13 @@
     "128": "icons/icon-128.png"
   },
   "action": {
-    "default_title": "Ouvrir P2P Mesh Workspace"
+    "default_title": "Ouvrir P2P Mesh Workspace",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "side_panel": {
     "default_path": "sidepanel/index.html"
@@ -19,13 +26,17 @@
     "service_worker": "background/service-worker.js"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'none';"
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none';"
   },
   "permissions": [
     "sidePanel",
     "offscreen",
     "storage",
     "unlimitedStorage",
+    "alarms",
+    "power"
+  ],
+  "optional_permissions": [
     "notifications"
   ]
 }

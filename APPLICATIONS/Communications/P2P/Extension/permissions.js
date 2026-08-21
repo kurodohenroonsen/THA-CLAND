@@ -1,6 +1,7 @@
 /**
  * Script de gestion d'autorisation Microphone & Caméra (Onglet dédié) (2025/2026)
- * Libération déterministe des flux matériels, fermeture d'AudioContext et arrêt des boucles RAF.
+ * - Broadcast de l'autorisation au Side Panel et Service Worker
+ * - Libération déterministe des flux matériels, fermeture d'AudioContext et arrêt des boucles RAF.
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -9,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const meter = document.getElementById('audio-meter');
   const meterFill = document.getElementById('audio-meter-fill');
   const successBox = document.getElementById('perm-success');
+  const errorBox = document.getElementById('perm-error');
 
   let activeStream = null;
   let audioCtx = null;
@@ -36,6 +38,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function requestPermissions(withVideo = false) {
     cleanupMedia();
+    if (errorBox) errorBox.style.display = 'none';
+
     try {
       if (btnAudio) btnAudio.disabled = true;
       if (btnBoth) btnBoth.disabled = true;
@@ -51,10 +55,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
       activeStream = await navigator.mediaDevices.getUserMedia(constraints);
 
+      // Notification immédiate au Side Panel et au Service Worker
+      try {
+        if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+          chrome.runtime.sendMessage({
+            type: 'HARDWARE_PERMISSION_GRANTED',
+            hasAudio: true,
+            hasVideo: withVideo,
+            timestamp: Date.now()
+          }).catch(() => {});
+        }
+      } catch (_) {}
+
       // Démarrage du vu-mètre audio en direct
       if (meter && meterFill) {
         meter.style.display = 'block';
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+        }
         const src = audioCtx.createMediaStreamSource(activeStream);
         const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 64;
@@ -76,21 +95,37 @@ document.addEventListener('DOMContentLoaded', () => {
       if (btnAudio) btnAudio.style.display = 'none';
       if (btnBoth) btnBoth.style.display = 'none';
 
-      // Libération des flux et fermeture propre après 2.5 secondes
+      // Libération des flux et fermeture propre après 2.2 secondes
       setTimeout(() => {
         cleanupMedia();
         try { window.close(); } catch {}
-      }, 2500);
+      }, 2200);
 
     } catch (err) {
       cleanupMedia();
       console.warn('Erreur demande permission:', err);
       if (btnAudio) {
         btnAudio.disabled = false;
-        btnAudio.textContent = '⚠️ Réessayer l\'autorisation';
+        btnAudio.textContent = '🔄 Réessayer l\'autorisation';
       }
       if (btnBoth) btnBoth.disabled = false;
-      alert(`Autorisation refusée ou ignorée : ${err.message}\nVeuillez autoriser l'accès dans la barre d'adresse pour continuer.`);
+
+      if (errorBox) {
+        errorBox.style.display = 'block';
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          errorBox.innerHTML = `
+            <strong>⚠️ Accès refusé par le navigateur</strong><br/>
+            Pour débloquer vos périphériques :
+            <ol style="margin: 8px 0 0 16px; padding: 0; line-height: 1.5;">
+              <li>Cliquez sur l'icône de réglages du site (ou cadenas) à gauche de la barre d'adresse.</li>
+              <li>Passez <strong>Microphone</strong> (et Caméra) sur <em>Autoriser</em>.</li>
+              <li>Revenez sur cette page et cliquez sur <em>Réessayer</em>.</li>
+            </ol>
+          `;
+        } else {
+          errorBox.innerHTML = `<strong>Erreur technique :</strong> ${err.message}`;
+        }
+      }
     }
   }
 

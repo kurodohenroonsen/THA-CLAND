@@ -1,6 +1,8 @@
 /**
- * Application Principale - P2P Mesh Workspace (Chrome Side Panel & Web App PWA)
- * Orchestration globale des modules, navigation par onglets, diagnostic et gestion des statuts.
+ * Application Principale - P2P Mesh Workspace (2025/2026 Hardened Edition)
+ * Orchestration globale : WebCrypto, WebRTC Mesh, CRDT, Storage Persistant,
+ * PowerManager (Screen Wake Lock), OS Interop (Clipboard, Web Share, Drag & Drop),
+ * WCO (Window Controls Overlay) et Keepalive MV3.
  */
 
 import { logger } from './core/logger.js';
@@ -9,6 +11,9 @@ import { dbManager } from './core/local-storage.js';
 import { P2PMeshNetwork } from './core/p2p-mesh.js';
 import { PresenceManager } from './core/presence.js';
 import { CRDTEngine } from './core/crdt-engine.js';
+import { powerManager } from './core/power-manager.js';
+import { installGlobalDropGuard, ClipboardService, ZeroTraceClipboard } from './core/os-interop.js';
+import { titleManager } from './core/title-manager.js';
 import { AuthController } from './modules/auth/auth-controller.js';
 import { ChatController } from './modules/chat/chat-controller.js';
 import { ForumController } from './modules/chat/forum-controller.js';
@@ -32,17 +37,22 @@ class P2PApp {
     this.callController = null;
 
     this.currentTab = 'chat';
+    this.keepalivePort = null;
+    this.deferredInstallPrompt = null;
   }
 
   async init() {
-    // 0. Vérification du contexte sécurisé (HTTPS / localhost requis pour WebCrypto & WebRTC)
+    // 0. Vérification du contexte sécurisé
     if (typeof window !== 'undefined' && (!window.isSecureContext || !window.crypto?.subtle)) {
       console.error('[App] Arrêt critique : Contexte non sécurisé (HTTP). WebCrypto et WebRTC indisponibles.');
       alert('Contexte non sécurisé : P2P Mesh requiert HTTPS ou localhost pour exécuter les opérations cryptographiques.');
       return;
     }
 
-    // Installation des gestionnaires d'évacuation matérielle (Anti-Leak micro/caméra)
+    // 1. Installation du garde-fou global Drag & Drop (Anti-Crash sur drop accidentel de fichier)
+    installGlobalDropGuard();
+
+    // 2. Initialisation des gestionnaires d'évacuation matérielle & anti-leak
     window.addEventListener('pagehide', () => {
       if (this.callController && this.callController.isInCall) {
         try { this.callController.leaveCall(); } catch {}
@@ -58,45 +68,120 @@ class P2PApp {
       }
     });
 
-    // Installation des gestionnaires d'erreurs globaux
+    // 3. Initialisation du logger et keepalive MV3
     logger.installGlobalHandlers();
     logger.info('App', '🌟 Démarrage de P2P Mesh Workspace...');
+    this.initServiceWorkerKeepalive();
+    this.initWindowControlsAndInstall();
 
-    // 1. Initialisation du stockage persistant IndexedDB & OPFS
-    logger.debug('App', '📦 Étape 1 : Initialisation de la base locale IndexedDB & OPFS...');
+    // 4. Initialisation du stockage persistant
+    logger.debug('App', '📦 Étape 1 : Initialisation IndexedDB & OPFS...');
     await dbManager.init();
 
-    // 2. Configuration des modales
+    // 5. Configuration des modales
     logger.debug('App', '🪟 Étape 2 : Configuration des déclencheurs de modales...');
     Modal.setupCloseTriggers();
 
-    // 3. Initialisation de l'authentification
+    // 6. Initialisation de l'authentification
     logger.debug('App', '🔑 Étape 3 : Initialisation du contrôleur d\'authentification...');
     this.authController = new AuthController(this.vault, (initializedVault) => {
       this.handleUserAuthenticated(initializedVault);
     });
 
-    // 4. Vérification de session enregistrée
+    // 7. Vérification de session enregistrée
     logger.debug('App', '💾 Étape 4 : Vérification de session persistante...');
     await this.authController.checkSavedSession();
 
-    // 5. Configuration des onglets de navigation
-    logger.debug('App', '🧭 Étape 5 : Configuration de la navigation par onglets...');
+    // 8. Configuration de la navigation par onglets
+    logger.debug('App', '🧭 Étape 5 : Configuration de la navigation...');
     this.initNavigation();
 
-    logger.info('App', '✅ Initialisation terminée avec succès. Prêt pour l\'authentification.');
+    titleManager.setSection('Accueil');
+    logger.info('App', '✅ Initialisation terminée avec succès.');
+  }
+
+  /**
+   * Canal Keepalive Port pour éviter l'extinction du Service Worker en cours d'utilisation active
+   */
+  initServiceWorkerKeepalive() {
+    if (typeof chrome !== 'undefined' && chrome.runtime?.connect) {
+      try {
+        this.keepalivePort = chrome.runtime.connect({ name: 'sidepanel-lifecycle' });
+        // Heartbeat toutes les 20s (inférieur au timeout SW de 30s)
+        setInterval(() => {
+          try {
+            this.keepalivePort?.postMessage({ type: 'PING' });
+          } catch (_) {
+            // Reconnexion automatique si déconnecté
+            try { this.keepalivePort = chrome.runtime.connect({ name: 'sidepanel-lifecycle' }); } catch (_) {}
+          }
+        }, 20000);
+      } catch (err) {
+        logger.debug('App', 'Port keepalive SW non disponible:', err);
+      }
+    }
+  }
+
+  /**
+   * Gestion de l'installation PWA et du bouton Pop-Out détachable
+   */
+  initWindowControlsAndInstall() {
+    // Bouton Pop-Out (Détacher vers fenêtre autonome)
+    const btnPopout = document.getElementById('btn-popout-window');
+    if (btnPopout) {
+      btnPopout.addEventListener('click', () => {
+        if (typeof chrome !== 'undefined' && chrome.windows?.create) {
+          chrome.windows.create({
+            url: chrome.runtime.getURL('sidepanel/index.html'),
+            type: 'popup',
+            width: 980,
+            height: 740
+          });
+        } else {
+          window.open(window.location.href, '_blank', 'width=980,height=740,menubar=no,toolbar=no');
+        }
+      });
+    }
+
+    // Gestion de l'installation PWA (beforeinstallprompt)
+    const btnInstall = document.getElementById('btn-install-app');
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      this.deferredInstallPrompt = e;
+      if (btnInstall) {
+        btnInstall.classList.remove('hidden');
+        btnInstall.onclick = async () => {
+          if (!this.deferredInstallPrompt) return;
+          this.deferredInstallPrompt.prompt();
+          const choice = await this.deferredInstallPrompt.userChoice;
+          if (choice.outcome === 'accepted') {
+            Toast.success('Application P2P Mesh installée avec succès !');
+          }
+          this.deferredInstallPrompt = null;
+          btnInstall.classList.add('hidden');
+        };
+      }
+    });
+
+    window.addEventListener('appinstalled', () => {
+      logger.info('App', '🎉 PWA P2P Mesh installée sur le système.');
+      if (btnInstall) btnInstall.classList.add('hidden');
+      document.body.classList.add('is-standalone');
+    });
+
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      document.body.classList.add('is-standalone');
+    }
   }
 
   async handleUserAuthenticated(vault) {
     logger.info('App', '🚀 Utilisateur authentifié ! Démarrage des sous-systèmes P2P...');
 
-    // Masquage de l'écran d'onboarding et affichage de l'interface principale
     const authView = document.getElementById('view-auth');
     const mainView = document.getElementById('view-main-app');
     if (authView) authView.classList.add('hidden');
     if (mainView) mainView.classList.remove('hidden');
 
-    // Mise à jour de l'en-tête
     const topicIndicator = document.getElementById('header-topic-id');
     if (topicIndicator) {
       topicIndicator.textContent = `Salon : ${vault.topicHex.substring(0, 8)}...`;
@@ -116,14 +201,12 @@ class P2PApp {
     this.crdt = new CRDTEngine(this.mesh, vault);
 
     // 4. Initialisation des contrôleurs fonctionnels
-    logger.debug('App', '💬 Initialisation ChatController, ForumController, DriveController, CallController...');
+    logger.debug('App', '💬 Initialisation des contrôleurs...');
     this.chatController = new ChatController(this.crdt, vault);
     this.forumController = new ForumController(this.crdt, vault);
     this.driveController = new DriveController(this.crdt, this.mesh, vault);
     this.callController = new CallController(this.mesh, this.presence, vault);
 
-    // Le chat réutilise le MÊME gestionnaire de transfert P2P que le Drive (une
-    // seule instance sert/écoute les blocs) pour envoyer/recevoir les médias joints.
     this.chatController.attachTransfer(this.driveController.transferManager, this.mesh);
 
     // 5. Écouteurs de statut réseau et présence
@@ -133,18 +216,18 @@ class P2PApp {
     logger.info('App', '📡 Lancement de la connexion P2P Mesh...');
     await this.mesh.start();
 
-    // 5b. Panneau de réglages / profil & diagnostic
+    // 7. Panneau de réglages & diagnostic
     this.setupSettingsPanel(vault);
     const gear = document.getElementById('btn-open-settings');
     if (gear) gear.classList.remove('hidden');
 
-    // 7. Chargement initial des données
+    // 8. Chargement initial des données
     logger.debug('App', '📂 Chargement initial des données locales...');
     await this.chatController.loadChannelMessages('general');
     await this.forumController.loadThreads();
     await this.driveController.loadFiles();
 
-    // 7b. Restauration du dernier onglet actif
+    // 9. Restauration du dernier onglet actif
     try {
       const lastTab = await dbManager.getSetting('active_tab', 'chat');
       if (lastTab && lastTab !== 'chat') this.switchTab(lastTab);
@@ -152,14 +235,13 @@ class P2PApp {
       logger.debug('App', 'Erreur restauration active_tab:', e);
     }
 
-    // 8. Initialisation de l'Offscreen Document pour le maintien WebRTC (Extension Chrome)
+    // 10. Initialisation de l'Offscreen Document pour le maintien WebRTC
     try {
-      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        logger.debug('App', '📴 Demande d\'initialisation du document Offscreen au Service Worker...');
-        chrome.runtime.sendMessage({ type: 'INIT_OFFSCREEN' });
+      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+        chrome.runtime.sendMessage({ type: 'INIT_OFFSCREEN' }).catch(() => {});
       }
     } catch (err) {
-      logger.debug('App', 'Offscreen document non requis ou non supporté sur cette plateforme:', err);
+      logger.debug('App', 'Offscreen document non requis:', err);
     }
 
     Toast.success('Connecté au réseau P2P Décentralisé !');
@@ -187,20 +269,19 @@ class P2PApp {
         footerPeers.textContent = `${peersCount || 0} pair(s) connecté(s)`;
       }
 
-      // Mise à jour du badge de l'icône de l'extension
+      // Mise à jour du titre de l'action / infobulle (sans polluer le badge de messages)
       try {
-        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-          chrome.runtime.sendMessage({ type: 'UPDATE_BADGE', peersCount: peersCount || 0 });
+        if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+          chrome.runtime.sendMessage({ type: 'UPDATE_PEERS_COUNT', peersCount: peersCount || 0 }).catch(() => {});
         }
       } catch (e) {
-        logger.debug('App', 'Erreur mise à jour badge icône:', e);
+        logger.debug('App', 'Erreur mise à jour peers count:', e);
       }
     });
 
     this.presence.onPresenceUpdate((peerList) => {
       this.renderPeersRoster(peerList);
 
-      // Calcul eMOS ITU-T G.107 multi-critères (RTT + Jitter + Perte)
       const footerQuality = document.getElementById('footer-quality');
       if (peerList.length > 0) {
         const avgLat = Math.round(peerList.reduce((acc, p) => acc + (p.latencyMs || 0), 0) / peerList.length);
@@ -221,7 +302,6 @@ class P2PApp {
       }
     });
 
-    // Écouteurs de résilience réseau et cycle de vie
     window.addEventListener('online', () => this.mesh?.handleNetworkOnline());
     window.addEventListener('offline', () => this.mesh?.handleNetworkOffline());
     document.addEventListener('visibilitychange', () => {
@@ -244,24 +324,24 @@ class P2PApp {
   switchTab(tabName) {
     logger.debug('App', `🧭 Navigation vers l'onglet: "${tabName}"`);
     this.currentTab = tabName;
-    // Persiste l'onglet actif (restauré au prochain démarrage).
     try {
       dbManager.saveSetting('active_tab', tabName);
     } catch (e) {
       logger.debug('App', 'Erreur sauvegarde active_tab:', e);
     }
-    // Réinitialise le compteur de non-lus du chat en revenant dessus.
+
+    const tabLabels = { chat: 'Messagerie', forum: 'Forums & Sujets', drive: 'Drive & Documents', media: 'Salons Vocaux/Vidéo' };
+    titleManager.setSection(tabLabels[tabName] || tabName);
+
     if (tabName === 'chat' && this.chatController) this.chatController.markActiveChannelRead();
 
-    // Mise à jour des boutons de navigation
     document.querySelectorAll('.nav-tab-btn').forEach(btn => {
       const isTarget = btn.getAttribute('data-tab') === tabName;
       btn.classList.toggle('active', isTarget);
       btn.setAttribute('aria-selected', isTarget ? 'true' : 'false');
-      btn.setAttribute('tabindex', isTarget ? '0' : '-1'); // Roving tabindex
+      btn.setAttribute('tabindex', isTarget ? '0' : '-1');
     });
 
-    // Affichage de la vue correspondante
     document.querySelectorAll('.view-section').forEach(view => {
       if (view.id === `tab-view-${tabName}`) {
         view.classList.remove('hidden');
@@ -270,14 +350,12 @@ class P2PApp {
       }
     });
 
-    // Rafraîchissement spécifique lors du changement d'onglet
     if (tabName === 'forum' && this.forumController) {
       this.forumController.loadThreads();
     } else if (tabName === 'drive' && this.driveController) {
       this.driveController.loadFiles();
       this.refreshStorageUI();
     } else if (tabName === 'media' && this.callController) {
-      // Affiche le lobby (liste des membres) dès l'ouverture de l'onglet Salons.
       this.callController.updateVideoGrid();
     }
   }
@@ -288,7 +366,6 @@ class P2PApp {
 
     container.innerHTML = '';
 
-    // Ajout de notre profil local
     const selfCard = document.createElement('div');
     selfCard.className = 'peer-card is-self';
     selfCard.innerHTML = `
@@ -338,9 +415,6 @@ class P2PApp {
     });
   }
 
-  /**
-   * Configure le panneau de réglages / profil & diagnostic (en-tête ⚙️).
-   */
   setupSettingsPanel(vault) {
     const gear = document.getElementById('btn-open-settings');
     const nameInput = document.getElementById('settings-name-input');
@@ -357,17 +431,22 @@ class P2PApp {
     const btnExportDiag = document.getElementById('btn-export-diagnostic');
     const logSelect = document.getElementById('settings-loglevel');
     const debugInput = document.getElementById('settings-debug-filter');
+    const btnReqPersist = document.getElementById('btn-request-persistence');
 
-    const flashCopy = async (btn, text) => {
-      try {
-        await navigator.clipboard.writeText(text);
-      } catch (err) {
-        logger.warn('App', 'Presse-papier non accessible:', err);
+    const flashCopy = async (btn, text, isSensitive = false) => {
+      const ok = isSensitive
+        ? await ZeroTraceClipboard.copySensitive(text, 45000)
+        : await ClipboardService.copy(text);
+
+      if (ok) {
+        const o = btn.textContent;
+        btn.textContent = '✓';
+        btn.classList.add('copied-flash');
+        setTimeout(() => { btn.textContent = o; btn.classList.remove('copied-flash'); }, 1400);
+        if (isSensitive) Toast.info('Code copié ! Auto-purge du presse-papier dans 45s.');
+      } else {
+        Toast.warning('Impossible d\'accéder au presse-papier.');
       }
-      const o = btn.textContent;
-      btn.textContent = '✓';
-      btn.classList.add('copied-flash');
-      setTimeout(() => { btn.textContent = o; btn.classList.remove('copied-flash'); }, 1400);
     };
 
     const openSettings = async () => {
@@ -376,31 +455,25 @@ class P2PApp {
       if (topicEl) topicEl.textContent = `${vault.topicHex.substring(0, 16)}…`;
       if (fpEl) fpEl.textContent = vault.peerIdHex ? vault.peerIdHex.substring(0, 16) : '—';
       if (avatarEl && this.presence) avatarEl.src = this.presence.generateAvatar(vault.peerId);
-      // Code papier sécurisé Zero-Trace
+
       if (paperEl) {
         paperEl.dataset.code = '';
         paperEl.textContent = '🔒 Masqué (Zéro-Trace RAM)';
       }
       if (notifChk) notifChk.checked = await dbManager.getSetting('notifications_enabled', false);
 
-      // Diagnostic & logging config
       if (logSelect) {
         try {
           const lvl = localStorage.getItem('pmesh.loglevel') || 'INFO';
           logSelect.value = lvl.toUpperCase();
-        } catch (e) {
-          logger.debug('App', 'Erreur lecture pmesh.loglevel:', e);
-        }
+        } catch (_) {}
       }
       if (debugInput) {
         try {
           debugInput.value = localStorage.getItem('pmesh.debug') || '';
-        } catch (e) {
-          logger.debug('App', 'Erreur lecture pmesh.debug:', e);
-        }
+        } catch (_) {}
       }
 
-      // Périphériques Audio & Vidéo (Persona 5.6)
       if (this.callController && this.callController.mediaManager) {
         const devices = await this.callController.mediaManager.getAvailableDevices();
         this.callController.updateDeviceSelectors(devices);
@@ -409,6 +482,18 @@ class P2PApp {
       await this.refreshStorageUI();
       Modal.open('modal-settings');
     };
+
+    if (btnReqPersist) {
+      btnReqPersist.addEventListener('click', async () => {
+        const res = await dbManager.requestPersistenceInteractive();
+        if (res.granted) {
+          Toast.success('Stockage persistant garanti par le navigateur !');
+        } else {
+          Toast.warning('Persistance refusée ou restreinte par le navigateur.');
+        }
+        await this.refreshStorageUI();
+      });
+    }
 
     const btnTestSpeaker = document.getElementById('btn-test-audio-output');
     const selectSpeaker = document.getElementById('select-audio-output');
@@ -444,26 +529,36 @@ class P2PApp {
         vault.userName = newName;
         await dbManager.saveSetting('user_name', newName);
         if (idNameEl) idNameEl.textContent = newName;
-        // Informe les pairs du nouveau nom (mise à jour du roster).
         try {
           this.mesh.broadcast({ type: 'PEER_HELLO', name: newName, pubkey: vault.publicKeyHex });
         } catch (err) {
-          logger.warn('App', 'Échec diffusion PEER_HELLO lors du changement de nom:', err);
+          logger.warn('App', 'Échec diffusion PEER_HELLO:', err);
         }
         Toast.success('Pseudonyme mis à jour.');
       });
     }
 
     if (btnCopyTopic) btnCopyTopic.addEventListener('click', () => flashCopy(btnCopyTopic, vault.topicHex));
-    if (btnCopyPaper && paperEl) btnCopyPaper.addEventListener('click', () => flashCopy(btnCopyPaper, paperEl.dataset.code || ''));
+    if (btnCopyPaper && paperEl) btnCopyPaper.addEventListener('click', () => flashCopy(btnCopyPaper, paperEl.dataset.code || '', true));
 
     if (notifChk) {
       notifChk.addEventListener('change', async () => {
-        if (notifChk.checked && 'Notification' in window && Notification.permission === 'default') {
-          try {
-            await Notification.requestPermission();
-          } catch (err) {
-            logger.warn('App', 'Demande de permission notification refusée:', err);
+        if (notifChk.checked) {
+          // Gestion des permissions optionnelles en contexte MV3
+          if (typeof chrome !== 'undefined' && chrome.permissions?.request) {
+            try {
+              const granted = await chrome.permissions.request({ permissions: ['notifications'] });
+              if (!granted) {
+                notifChk.checked = false;
+                Toast.warning('Permission notification refusée par Chrome.');
+                return;
+              }
+            } catch (_) {}
+          } else if ('Notification' in window && Notification.permission === 'default') {
+            try {
+              const res = await Notification.requestPermission();
+              if (res !== 'granted') notifChk.checked = false;
+            } catch (_) {}
           }
         }
         await dbManager.saveSetting('notifications_enabled', notifChk.checked);
@@ -474,11 +569,9 @@ class P2PApp {
       logSelect.addEventListener('change', () => {
         try {
           localStorage.setItem('pmesh.loglevel', logSelect.value);
-          logger.info('App', `Niveau de log défini sur: ${logSelect.value}`);
+          logger.info('App', `Niveau de log: ${logSelect.value}`);
           Toast.info(`Niveau de journalisation : ${logSelect.value}`);
-        } catch (e) {
-          logger.warn('App', 'Impossible de sauvegarder pmesh.loglevel:', e);
-        }
+        } catch (_) {}
       });
     }
 
@@ -488,11 +581,9 @@ class P2PApp {
           const val = debugInput.value.trim();
           if (val) localStorage.setItem('pmesh.debug', val);
           else localStorage.removeItem('pmesh.debug');
-          logger.info('App', `Filtre debug mis à jour: ${val || 'aucun'}`);
+          logger.info('App', `Filtre debug: ${val || 'aucun'}`);
           Toast.info('Filtres de débogage mis à jour.');
-        } catch (e) {
-          logger.warn('App', 'Impossible de sauvegarder pmesh.debug:', e);
-        }
+        } catch (_) {}
       });
     }
 
@@ -516,23 +607,23 @@ class P2PApp {
           a.click();
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
-          Toast.success('Rapport de diagnostic exporté avec succès !');
+          Toast.success('Rapport de diagnostic exporté !');
         } catch (err) {
-          logger.error('App', 'Échec de l\'export du diagnostic:', err);
-          Toast.error('Impossible d\'exporter le rapport de diagnostic.');
+          logger.error('App', 'Échec export diagnostic:', err);
+          Toast.error('Impossible d\'exporter le rapport.');
         }
       });
     }
 
     if (btnLogout) {
       btnLogout.addEventListener('click', async () => {
-        if (!confirm('Se déconnecter et effacer la session locale (le code papier restera nécessaire pour revenir) ?')) return;
-        try { await dbManager.delete('settings', 'last_paper_code'); } catch (e) { logger.warn('App', 'Erreur suppression session locale:', e); }
-        try { this.callController && this.callController.isInCall && this.callController.leaveCall(); } catch {}
-        try { this.mesh && this.mesh.stop(); } catch (e) { logger.warn('App', 'Erreur arrêt mesh:', e); }
-        try { this.presence && this.presence.stop(); } catch (e) { logger.warn('App', 'Erreur arrêt presence:', e); }
-        try { this.crdt && this.crdt.destroy(); } catch {}
-        try { this.vault && this.vault.destroy(); } catch {}
+        if (!confirm('Se déconnecter et effacer la session locale ?')) return;
+        try { await dbManager.delete('settings', 'last_paper_code'); } catch (_) {}
+        try { this.callController?.isInCall && this.callController.leaveCall(); } catch {}
+        try { this.mesh?.stop(); } catch (_) {}
+        try { this.presence?.stop(); } catch (_) {}
+        try { this.crdt?.destroy(); } catch {}
+        try { this.vault?.destroy(); } catch {}
         logger.clearBuffer();
         Toast.info('Déconnexion…');
         setTimeout(() => location.reload(), 500);
@@ -540,26 +631,44 @@ class P2PApp {
     }
   }
 
-  /**
-   * Rafraîchit les jauges de stockage (réglages + drive).
-   */
   async refreshStorageUI() {
     const est = await dbManager.estimateStorage();
+    const isPersisted = await dbManager.isPersisted();
+    const btnReqPersist = document.getElementById('btn-request-persistence');
+    const badgePersist = document.getElementById('settings-persistence-badge');
+
     const fmt = (b) => {
       if (!b) return '0 o';
       const k = 1024, u = ['o', 'Ko', 'Mo', 'Go', 'To'];
       const i = Math.floor(Math.log(b) / Math.log(k));
       return `${(b / Math.pow(k, i)).toFixed(1)} ${u[i]}`;
     };
-    const isPersisted = await dbManager.isPersisted();
-    const persBadge = isPersisted ? ' 🔒 (Persistant)' : ' ⚠️ (Évictable)';
-    const label = est.quota ? `${fmt(est.usage)} / ${fmt(est.quota)} (${est.percent}%)${persBadge}` : `${fmt(est.usage)}${persBadge}`;
+
+    if (badgePersist) {
+      badgePersist.textContent = isPersisted ? '🔒 Persistant (Garanti)' : '⚠️ Évictable (Best-effort)';
+      badgePersist.className = `badge ${isPersisted ? 'badge-active' : 'badge-version'}`;
+    }
+
+    if (btnReqPersist) {
+      btnReqPersist.style.display = isPersisted ? 'none' : 'inline-block';
+    }
+
     const pct = est.quota ? est.percent : 0;
+    const label = est.quota ? `${fmt(est.usage)} / ${fmt(est.quota)} (${pct}%)` : fmt(est.usage);
+
     const setBar = (barId, txtId) => {
       const bar = document.getElementById(barId), txt = document.getElementById(txtId);
-      if (bar) { bar.style.width = `${Math.min(100, pct)}%`; bar.style.background = pct > 85 ? 'var(--accent-rose)' : ''; }
+      if (bar) {
+        bar.style.width = `${Math.min(100, pct)}%`;
+        // Palette 4 paliers (Cyan, Jaune 75%, Orange 85%, Rose 95%)
+        if (pct >= 95) bar.style.background = 'var(--accent-rose)';
+        else if (pct >= 85) bar.style.background = '#f97316';
+        else if (pct >= 75) bar.style.background = 'var(--accent-amber)';
+        else bar.style.background = 'var(--grad-primary)';
+      }
       if (txt) txt.textContent = label;
     };
+
     setBar('settings-storage-bar', 'settings-storage-text');
     setBar('drive-storage-bar', 'drive-storage-text');
   }
@@ -569,8 +678,7 @@ class P2PApp {
   }
 }
 
-// Initialisation globale
 document.addEventListener('DOMContentLoaded', () => {
   const app = new P2PApp();
-  app.init().catch(err => logger.error('App', '❌ Erreur fatale au démarrage:', err));
+  app.init().catch(err => logger.error('App', '❌ Erreur fatale démarrage:', err));
 });

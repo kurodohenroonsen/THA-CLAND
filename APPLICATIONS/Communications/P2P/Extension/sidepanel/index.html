@@ -3,8 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#0a0d14">
+  <link rel="manifest" href="manifest.webmanifest">
   <title>P2P Mesh - Espace Collaboratif Décentralisé</title>
   
+  <!-- Shim Plateforme Universel (Extension / PWA Web) -->
+  <script src="js/platform-web.js"></script>
+
   <!-- Feuilles de Style Modulaires -->
   <link rel="stylesheet" href="css/variables.css">
   <link rel="stylesheet" href="css/base.css">
@@ -14,14 +19,15 @@
   <link rel="stylesheet" href="css/drive.css">
   <link rel="stylesheet" href="css/media.css">
   <link rel="stylesheet" href="css/enhancements.css">
+  <link rel="stylesheet" href="css/mobile.css">
 </head>
 <body>
   <div id="app-container">
 
-    <!-- En-tête Principal -->
+    <!-- En-tête Principal (Support WCO & Multi-Fenêtres) -->
     <header class="app-header">
       <div class="header-brand">
-        <img src="../icons/icon-32.png" alt="P2P Mesh Logo" class="brand-logo-img"/>
+        <img src="icons/icon-32.png" alt="P2P Mesh Logo" class="brand-logo-img"/>
         <span class="brand-title">P2P Mesh</span>
       </div>
       <div class="header-stats">
@@ -30,6 +36,8 @@
           <span id="network-status-text">Hors-Ligne</span>
         </div>
         <span id="header-peers-count" class="badge badge-version">👥 0</span>
+        <button id="btn-install-app" class="btn btn-secondary btn-xs hidden" title="Installer l'application P2P Mesh" aria-label="Installer l'application">📥 <span class="install-text">Installer</span></button>
+        <button id="btn-popout-window" class="icon-btn" title="Détacher vers une fenêtre autonome" aria-label="Détacher la fenêtre">⧉</button>
         <button id="btn-open-settings" class="icon-btn hidden" title="Réglages & profil" aria-label="Réglages">⚙️</button>
       </div>
     </header>
@@ -471,12 +479,16 @@
           </div>
 
           <div class="settings-section">
-            <div class="storage-meta">
-              <span>💾 Stockage utilisé</span>
+            <div class="storage-meta" style="display: flex; justify-content: space-between; align-items: center;">
+              <span>💾 Stockage & Persistance</span>
               <span id="settings-storage-text">—</span>
             </div>
-            <div class="progress-bar-container">
+            <div class="progress-bar-container" style="margin: 6px 0;">
               <div id="settings-storage-bar" class="progress-bar-fill" style="width:0%"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+              <span id="settings-persistence-badge" class="badge badge-version" style="font-size: 10px;">Vérification...</span>
+              <button id="btn-request-persistence" class="btn btn-secondary btn-xs" style="display: none;">🔒 Activer la Persistance</button>
             </div>
           </div>
 

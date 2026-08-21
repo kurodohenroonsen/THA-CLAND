@@ -8,10 +8,11 @@ import { FileChunker } from './file-chunker.js';
 import { VersioningDAG } from './versioning-dag.js';
 import { DriveTransferManager } from './drive-transfer.js';
 import { Modal } from '../../ui/modal.js';
-import { Toast } from '../../ui/toast.js';
 import { CONFIG } from '../../core/config.js';
 import { dbManager } from '../../core/local-storage.js';
 import { SanitizerService } from '../../core/sanitizer.js';
+import { powerManager } from '../../core/power-manager.js';
+import { DragDropHelper, WebShareService } from '../../core/os-interop.js';
 
 export class DriveController {
   constructor(crdtEngine, meshNetwork, cryptoVault) {
@@ -51,22 +52,16 @@ export class DriveController {
         }
       });
 
-      // Gestion du Glisser-Déposer (Drag & Drop)
-      this.dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        this.dropZone.classList.add('drag-active');
-      });
-
-      this.dropZone.addEventListener('dragleave', () => {
-        this.dropZone.classList.remove('drag-active');
-      });
-
-      this.dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        this.dropZone.classList.remove('drag-active');
-        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-          logger.debug('Drive', '📥 Fichier déposé par Drag & Drop:', e.dataTransfer.files[0].name);
-          this.handleFileUpload(e.dataTransfer.files[0]);
+      // Gestion optimisée du Glisser-Déposer avec DragDropHelper anti-scintillement
+      DragDropHelper.attach(this.dropZone, {
+        onHoverChange: (isHover) => {
+          this.dropZone.classList.toggle('drag-active', isHover);
+        },
+        onFilesDropped: async (files) => {
+          logger.debug('Drive', `📥 ${files.length} fichier(s) déposé(s) par Glisser-Déposer`);
+          for (const file of files) {
+            await this.handleFileUpload(file);
+          }
         }
       });
     }
@@ -525,7 +520,9 @@ export class DriveController {
   }
 
   async handleDownloadFile(commit, buttonEl) {
+    const lockKey = `drive-dl-${commit.fileId || commit.commitId}`;
     try {
+      await powerManager.acquireLock(lockKey, `Téléchargement Drive P2P: ${commit.fileName}`);
       const originalText = buttonEl.innerHTML;
       buttonEl.disabled = true;
       buttonEl.innerHTML = '<span class="spinner-sm"></span> 0%';
@@ -545,8 +542,7 @@ export class DriveController {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      // Laisse le temps au navigateur de démarrer le transfert avant de révoquer
-      // l'URL et de nettoyer l'éventuel fichier temporaire OPFS (assemblage en flux).
+
       setTimeout(async () => {
         URL.revokeObjectURL(url);
         if (typeof blob._opfsCleanup === 'function') await blob._opfsCleanup();
@@ -561,6 +557,8 @@ export class DriveController {
       Toast.error(`Erreur de téléchargement : ${err.message}`);
       buttonEl.disabled = false;
       buttonEl.innerHTML = '⬇️ Télécharger';
+    } finally {
+      await powerManager.releaseLock(lockKey);
     }
   }
 

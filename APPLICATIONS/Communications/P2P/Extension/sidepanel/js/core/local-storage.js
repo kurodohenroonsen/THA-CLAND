@@ -190,7 +190,7 @@ export class LocalStorageManager {
     return this._initPromise;
   }
 
-  // --- Primitives Génériques Optimisées ---
+  // --- Primitives Génériques Optimisées avec Récupération de Quota ---
 
   async _ensureDb() {
     if (!this.db) {
@@ -198,14 +198,41 @@ export class LocalStorageManager {
     }
   }
 
+  async _wrapWriteWithQuotaRecovery(operationName, writeFn) {
+    try {
+      return await writeFn();
+    } catch (err) {
+      const isQuota = err && (
+        err.name === 'QuotaExceededError' ||
+        err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+        err.code === 22 ||
+        (err.message && err.message.toLowerCase().includes('quota'))
+      );
+
+      if (isQuota) {
+        logger.warn('Storage', `🚨 QuotaExceededError sur '${operationName}' ! Lancement de la purge d'urgence...`);
+        await this.sweepStaleTempFiles(0);
+        const { purgedCount, purgedBytes } = await this.purgeOrphanChunks();
+
+        if (purgedCount > 0) {
+          logger.info('Storage', `✅ ${purgedCount} blocs orphelins purgés (${(purgedBytes / 1048576).toFixed(1)} Mo libérés). Nouvelle tentative...`);
+          return await writeFn();
+        }
+      }
+      throw err;
+    }
+  }
+
   async save(storeName, item) {
-    await this._ensureDb();
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction([storeName], 'readwrite');
-      const store = transaction.objectStore(storeName);
-      const request = store.put(item);
-      request.onsuccess = () => resolve(item);
-      request.onerror = (e) => reject(e.target.error);
+    return this._wrapWriteWithQuotaRecovery(`save(${storeName})`, async () => {
+      await this._ensureDb();
+      return new Promise((resolve, reject) => {
+        const transaction = this.db.transaction([storeName], 'readwrite');
+        const store = transaction.objectStore(storeName);
+        const request = store.put(item);
+        request.onsuccess = () => resolve(item);
+        request.onerror = (e) => reject(e.target.error);
+      });
     });
   }
 
@@ -214,18 +241,20 @@ export class LocalStorageManager {
    */
   async saveBatch(storeName, items) {
     if (!items || items.length === 0) return [];
-    await this._ensureDb();
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction([storeName], 'readwrite');
-      const store = transaction.objectStore(storeName);
+    return this._wrapWriteWithQuotaRecovery(`saveBatch(${storeName})`, async () => {
+      await this._ensureDb();
+      return new Promise((resolve, reject) => {
+        const transaction = this.db.transaction([storeName], 'readwrite');
+        const store = transaction.objectStore(storeName);
 
-      transaction.oncomplete = () => resolve(items);
-      transaction.onerror = (e) => reject(e.target.error || transaction.error);
-      transaction.onabort = (e) => reject(e.target.error || transaction.error || new Error('Transaction annulée'));
+        transaction.oncomplete = () => resolve(items);
+        transaction.onerror = (e) => reject(e.target.error || transaction.error);
+        transaction.onabort = (e) => reject(e.target.error || transaction.error || new Error('Transaction annulée'));
 
-      for (let i = 0; i < items.length; i++) {
-        store.put(items[i]);
-      }
+        for (let i = 0; i < items.length; i++) {
+          store.put(items[i]);
+        }
+      });
     });
   }
 
@@ -478,17 +507,28 @@ export class LocalStorageManager {
   }
 
   async requestPersistence() {
-    if (navigator.storage && navigator.storage.persist) {
-      try {
-        const granted = await navigator.storage.persist();
-        logger.info('Storage', `Demande persistance explicite: ${granted ? 'accordée' : 'refusée'}`);
-        return granted;
-      } catch (e) {
-        logger.warn('Storage', 'Erreur demande persistance:', e);
-        return false;
-      }
+    const res = await this.requestPersistenceInteractive();
+    return res.granted;
+  }
+
+  /**
+   * Demande de persistance interactive avec retour explicite
+   */
+  async requestPersistenceInteractive() {
+    if (!navigator.storage || !navigator.storage.persist) {
+      return { supported: false, granted: false, reason: 'API non supportée' };
     }
-    return false;
+    try {
+      const already = navigator.storage.persisted ? await navigator.storage.persisted() : false;
+      if (already) return { supported: true, granted: true, already: true };
+
+      const granted = await navigator.storage.persist();
+      logger.info('Storage', `Demande interactive de persistance : ${granted ? 'ACCORDÉE 🔒' : 'REFUSÉE ⚠️'}`);
+      return { supported: true, granted, already: false };
+    } catch (err) {
+      logger.warn('Storage', 'Erreur demande interactive de persistance:', err);
+      return { supported: true, granted: false, error: err.message };
+    }
   }
 
   async estimateStorage() {
@@ -510,13 +550,25 @@ export class LocalStorageManager {
   }
 
   async ensureSpaceFor(bytes, mode = 'download') {
-    const multiplier = mode === 'download' ? 2.1 : 1.15;
-    const { available, quota } = await this.estimateStorage();
+    const multipliers = { download: 2.1, upload: 1.15, replicate: 1.1 };
+    const multiplier = multipliers[mode] || 1.2;
+    let { available, quota } = await this.estimateStorage();
     if (available === Infinity) return true;
+
     const needed = Math.ceil(bytes * multiplier);
     if (needed > available) {
-      const mb = (n) => `${(n / (1024 * 1024)).toFixed(0)} Mo`;
-      throw new Error(`Espace insuffisant (${mode}) : ${mb(needed)} requis (avec marge de sécurité), ${mb(available)} disponibles (quota ${mb(quota)}).`);
+      // Tentative de libération d'espace par GC préventif
+      logger.info('Storage', `Espace insuffisant (${needed} o requis, ${available} o dispo). Déclenchement du GC préventif...`);
+      await this.sweepStaleTempFiles(60 * 1000);
+      await this.purgeOrphanChunks();
+
+      const recheck = await this.estimateStorage();
+      available = recheck.available;
+    }
+
+    if (needed > available) {
+      const mb = (n) => `${(n / (1024 * 1024)).toFixed(1)} Mo`;
+      throw new Error(`Espace disque insuffisant (${mode}) : ${mb(needed)} requis avec marge de sécurité, mais seulement ${mb(available)} disponibles sur un quota de ${mb(quota)}.`);
     }
     return true;
   }
@@ -617,23 +669,27 @@ export class LocalStorageManager {
   }
 
   async _saveChunkDirect(hash, arrayBuffer) {
-    if (this.opfsRoot) {
-      try {
-        const fileHandle = await this.opfsRoot.getFileHandle(`chunk_${hash}`, { create: true });
-        const writable = await fileHandle.createWritable();
-        await writable.write(arrayBuffer);
-        await writable.close();
-        return { hash, size: arrayBuffer.byteLength, inOPFS: true };
-      } catch (err) {
-        logger.warn('Storage', `Échec écriture OPFS pour chunk ${hash}, fallback IndexedDB:`, err);
+    return this._wrapWriteWithQuotaRecovery(`saveChunk(${hash})`, async () => {
+      if (this.opfsRoot) {
+        try {
+          const fileHandle = await this.opfsRoot.getFileHandle(`chunk_${hash}`, { create: true });
+          const writable = await fileHandle.createWritable();
+          await writable.write(arrayBuffer);
+          await writable.close();
+          return { hash, size: arrayBuffer.byteLength, inOPFS: true };
+        } catch (err) {
+          const isQuota = err && (err.name === 'QuotaExceededError' || err.code === 22);
+          if (isQuota) throw err;
+          logger.warn('Storage', `Échec écriture OPFS pour chunk ${hash}, fallback IndexedDB:`, err);
+        }
       }
-    }
 
-    return this.save('file_chunks', {
-      hash,
-      data: arrayBuffer,
-      size: arrayBuffer.byteLength,
-      timestamp: Date.now()
+      return this.save('file_chunks', {
+        hash,
+        data: arrayBuffer,
+        size: arrayBuffer.byteLength,
+        timestamp: Date.now()
+      });
     });
   }
 

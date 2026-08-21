@@ -10,6 +10,8 @@ import { Toast } from '../../ui/toast.js';
 import { Modal } from '../../ui/modal.js';
 import { FileChunker } from '../drive/file-chunker.js';
 import { SanitizerService } from '../../core/sanitizer.js';
+import { titleManager } from '../../core/title-manager.js';
+import { DragDropHelper } from '../../core/os-interop.js';
 
 export class ChatController {
   constructor(crdtEngine, cryptoVault) {
@@ -74,6 +76,20 @@ export class ChatController {
       this.messageInput.addEventListener('input', () => {
         this.handleUserTyping();
         this.autoGrowInput();
+      });
+
+      // Support du collage direct de captures d'écran (Cmd+V / Ctrl+V)
+      this.messageInput.addEventListener('paste', (e) => {
+        const items = Array.from(e.clipboardData?.items || []);
+        const imgFiles = items
+          .filter(it => it.kind === 'file' && it.type.startsWith('image/'))
+          .map(it => it.getAsFile())
+          .filter(Boolean);
+        if (imgFiles.length > 0) {
+          e.preventDefault();
+          this.stageFiles(imgFiles);
+          Toast.info(`${imgFiles.length} image(s) collée(s) depuis le presse-papier.`);
+        }
       });
     }
 
@@ -313,32 +329,42 @@ export class ChatController {
 
   updateChannelBadge(channelId) {
     const btn = this.channelsList?.querySelector(`[data-channel-id="${channelId}"]`);
-    if (!btn) return;
-    let badge = btn.querySelector('.channel-unread');
-    const count = this.unreadCounts.get(channelId) || 0;
-    if (count > 0) {
-      if (!badge) {
-        badge = document.createElement('span');
-        badge.className = 'channel-unread';
-        btn.appendChild(badge);
+    if (btn) {
+      let badge = btn.querySelector('.channel-unread');
+      const count = this.unreadCounts.get(channelId) || 0;
+      if (count > 0) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'channel-unread';
+          btn.appendChild(badge);
+        }
+        badge.textContent = count > 99 ? '99+' : String(count);
+      } else if (badge) {
+        badge.remove();
       }
-      badge.textContent = count > 99 ? '99+' : String(count);
-    } else if (badge) {
-      badge.remove();
     }
+
+    // Synchronisation de l'App Badging et de l'indicateur d'onglet
+    const totalUnread = Array.from(this.unreadCounts.values()).reduce((sum, n) => sum + (n || 0), 0);
+    titleManager.setUnreadCount(totalUnread);
   }
 
   maybeDesktopNotify(msg) {
     try {
-      if (!document.hidden) return;
+      const isWindowHidden = typeof document !== 'undefined' && (document.hidden || !document.hasFocus());
+      const isOtherChannel = msg.channelId !== this.activeChannelId;
+      if (!isWindowHidden && !isOtherChannel) return;
+
       dbManager.getSetting('notifications_enabled', false).then((enabled) => {
         if (!enabled) return;
-        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
           chrome.runtime.sendMessage({
             type: 'SHOW_NOTIFICATION',
+            id: `p2p_channel_${msg.channelId}`,
             title: `💬 ${msg.authorName || 'Nouveau message'} • #${msg.channelId}`,
-            body: (msg.text || '').substring(0, 120)
-          });
+            body: (msg.text || '').substring(0, 120),
+            priority: 1
+          }).catch(() => {});
         }
       });
     } catch (err) {

@@ -1,10 +1,13 @@
 /**
- * Service Worker PWA — P2P Mesh Workspace
- * Cache complet pour fonctionnement 100% hors-ligne & modules ES6
+ * Service Worker PWA — P2P Mesh Workspace (Standards 2025/2026)
+ * Stratégies de Cache Hybrides (SWR + Network-First), Mises à Jour Atomiques & Bypass Signalement WebRTC
  */
 
-const CACHE_NAME = 'pmesh-pwa-v5';
+const CACHE_VERSION = 'v6';
+const CACHE_PREFIX = 'pmesh-pwa-';
+const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 
+// Liste exhaustive des assets nécessaires au fonctionnement 100% hors-ligne
 const PRECACHE_ASSETS = [
   './',
   './index.html',
@@ -24,6 +27,9 @@ const PRECACHE_ASSETS = [
   './js/core/p2p-mesh.js',
   './js/core/presence.js',
   './js/core/local-storage.js',
+  './js/core/power-manager.js',
+  './js/core/os-interop.js',
+  './js/core/title-manager.js',
   './js/modules/auth/auth-controller.js',
   './js/modules/chat/chat-controller.js',
   './js/modules/chat/forum-controller.js',
@@ -50,52 +56,114 @@ const PRECACHE_ASSETS = [
   './css/media.css',
   './css/enhancements.css',
   './css/mobile.css',
+  './icons/icon-16.png',
   './icons/icon-32.png',
   './icons/icon-48.png',
   './icons/icon-128.png',
   './icons/icon-192.png',
-  './icons/icon-512.png'
+  './icons/icon-512.png',
+  './icons/icon-192-maskable.png',
+  './icons/icon-512-maskable.png'
 ];
 
+// 1. INSTALLATION : Pré-cache résilient SANS skipWaiting automatique (protège les sessions actives)
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_ASSETS).catch((err) => {
-        console.warn('[SW] Pré-cache partiel:', err);
-      });
-    }).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(async (cache) => {
+      for (const asset of PRECACHE_ASSETS) {
+        try {
+          await cache.add(asset);
+        } catch (err) {
+          console.warn(`[SW] Échec du pré-cache pour ${asset}:`, err);
+        }
+      }
+    })
   );
 });
 
+// 2. ACTIVATION : Invalidation & Purge Atomique des anciens caches du namespace
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
-        keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
+        keys
+          .filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE_NAME)
+          .map((k) => {
+            console.log(`[SW] Purge atomique ancien cache : ${k}`);
+            return caches.delete(k);
+          })
       );
     }).then(() => self.clients.claim())
   );
 });
 
-self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
-  const url = new URL(event.request.url);
-  if (url.protocol === 'ws:' || url.protocol === 'wss:') return;
+// 3. MESSAGE : Bascule vers la nouvelle version à la demande de l'utilisateur
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    console.log('[SW] Réception SKIP_WAITING : bascule vers la nouvelle version...');
+    self.skipWaiting();
+  }
+});
 
+// 4. FETCH : Routage & Stratégies Hybrides
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+
+  const url = new URL(req.url);
+
+  // A. NETWORK ONLY / BYPASS STRICT :
+  // - WebSocket & WebRTC (ws:, wss:)
+  // - Protocoles non-HTTP (chrome-extension:, blob:, data:)
+  // - Requêtes partielles / Range (streaming média Drive pour éviter TypeError 206)
+  // - Domaines distants (Trackers WebTorrent, Relais Nostr, serveurs STUN/TURNS)
+  if (
+    url.protocol === 'ws:' ||
+    url.protocol === 'wss:' ||
+    url.protocol === 'chrome-extension:' ||
+    url.protocol === 'blob:' ||
+    url.protocol === 'data:' ||
+    req.headers.has('range') ||
+    url.origin !== self.location.origin ||
+    url.pathname.includes('/announce') ||
+    url.pathname.includes('/api/') ||
+    url.searchParams.has('info_hash')
+  ) {
+    return; // Bypass SW direct vers la pile réseau native
+  }
+
+  // B. NAVIGATION (HTML Shell) : Network-First avec repli Cache (Offline)
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      fetch(req)
+        .then((networkRes) => {
+          if (networkRes && networkRes.status === 200) {
+            const copy = networkRes.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
+          }
+          return networkRes;
+        })
+        .catch(() => {
+          return caches.match('./index.html') || caches.match(req);
+        })
+    );
+    return;
+  }
+
+  // C. ASSETS LOCAUX (JS, CSS, Images, Polices) : Stale-While-Revalidate (SWR)
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request).then((networkRes) => {
-        if (networkRes && networkRes.status === 200 && networkRes.type === 'basic') {
-          const clone = networkRes.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        }
-        return networkRes;
-      }).catch(() => {
-        if (event.request.mode === 'navigate') {
-          return caches.match('./index.html');
-        }
-      });
+    caches.match(req).then((cachedRes) => {
+      const fetchPromise = fetch(req)
+        .then((networkRes) => {
+          if (networkRes && networkRes.status === 200 && networkRes.type === 'basic') {
+            const copy = networkRes.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
+          }
+          return networkRes;
+        })
+        .catch(() => cachedRes);
+
+      return cachedRes || fetchPromise;
     })
   );
 });
