@@ -1,13 +1,13 @@
+/**
+ * VersioningDAG.js (Pass 4 - Version 2026 Git-like Merkle DAG & LCA Reconciliation)
+ * Gestion d'arborescence immuable, commits 256-bit signés, dédoublonnage de blocs,
+ * réconciliation 3-Way LCA et métriques différentielles inter-versions.
+ */
+
 import { logger } from '../../core/logger.js';
 import { CryptoVault } from '../../core/crypto-vault.js';
 import { dbManager } from '../../core/local-storage.js';
 import { MerkleTree } from './merkle-tree.js';
-
-/**
- * Moteur de Versioning Git-like, Arborescence Hiérarchique & Merkle DAG (2025/2026)
- * Gestion des dossiers, commits immuables 256-bit, dédoublonnage de blocs,
- * détection de forks concurrents (Merkle-CRDT) et historique inviolable.
- */
 
 export class VersioningDAG {
   /**
@@ -66,9 +66,9 @@ export class VersioningDAG {
     const allCommits = await dbManager.getAllFileCommits();
     const deletedFileIds = await dbManager.getDeletedFileIds();
 
-    const folderMap = new Map(); // folderPath -> folderObj
+    const folderMap = new Map();
 
-    // 1. Dossiers explicites créés (non supprimés)
+    // 1. Dossiers explicites créés
     for (const f of explicitFolders) {
       if (deletedFolders.has(f.path)) continue;
       const fNormParent = VersioningDAG.normalizePath(f.parentPath);
@@ -134,7 +134,72 @@ export class VersioningDAG {
   }
 
   /**
-   * Crée un nouveau commit immuable signé et vérifié
+   * Trouve le plus proche ancêtre commun (Lowest Common Ancestor - LCA) entre deux têtes de DAG
+   */
+  static findLowestCommonAncestor(headCommitIdA, headCommitIdB, commitMap) {
+    if (headCommitIdA === headCommitIdB) return commitMap.get(headCommitIdA) || null;
+
+    const ancestorsA = new Set();
+    const queueA = [headCommitIdA];
+
+    while (queueA.length > 0) {
+      const currId = queueA.shift();
+      if (!currId || ancestorsA.has(currId)) continue;
+      ancestorsA.add(currId);
+      const commit = commitMap.get(currId);
+      if (commit && Array.isArray(commit.parents)) {
+        for (const p of commit.parents) queueA.push(p);
+      }
+    }
+
+    const queueB = [headCommitIdB];
+    const visitedB = new Set();
+
+    while (queueB.length > 0) {
+      const currId = queueB.shift();
+      if (!currId || visitedB.has(currId)) continue;
+      visitedB.add(currId);
+
+      if (ancestorsA.has(currId)) {
+        return commitMap.get(currId) || null;
+      }
+
+      const commit = commitMap.get(currId);
+      if (commit && Array.isArray(commit.parents)) {
+        for (const p of commit.parents) queueB.push(p);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Calcule le ratio de dédoublonnage de blocs entre une nouvelle version et ses parents
+   */
+  static computeDeduplicationStats(newChunks, parentChunks) {
+    if (!parentChunks || parentChunks.length === 0) {
+      return { reusedChunks: 0, newChunks: newChunks.length, dedupRatio: 0 };
+    }
+
+    const parentHashes = new Set(parentChunks.map(c => c.hash));
+    let reused = 0;
+
+    for (const chunk of newChunks) {
+      if (parentHashes.has(chunk.hash)) {
+        reused++;
+      }
+    }
+
+    const ratio = newChunks.length > 0 ? Math.round((reused / newChunks.length) * 100) : 0;
+    return {
+      reusedChunks: reused,
+      newChunks: newChunks.length - reused,
+      dedupRatio: ratio
+    };
+  }
+
+  /**
+   * Crée un nouveau commit immuable signé et inséré dans le DAG
    */
   static async createCommit({
     fileId,
@@ -148,28 +213,36 @@ export class VersioningDAG {
     parentCommitIds = null,
     commitMessage = 'Mise à jour du document',
     rootMerkleHash = null,
-    chunks,
+    chunks = [],
     lamportClock = 0
   }) {
     const normalizedFolder = VersioningDAG.normalizePath(folderPath);
 
-    // Détermination automatique des parents si non fournis
     let parents = parentCommitIds;
     let versionNumber = 1;
+    let dedupStats = { reusedChunks: 0, newChunks: chunks.length, dedupRatio: 0 };
+
+    const existingCommits = await dbManager.getCommitsByFileId(fileId);
 
     if (!parents) {
-      const existingCommits = await dbManager.getCommitsByFileId(fileId);
       const headsInfo = VersioningDAG.resolveDAGHeads(existingCommits);
       if (headsInfo.primaryHead) {
         parents = headsInfo.allHeads.map(h => h.commitId);
         versionNumber = headsInfo.primaryHead.versionNumber + 1;
+        dedupStats = VersioningDAG.computeDeduplicationStats(chunks, headsInfo.primaryHead.chunks);
       } else {
         parents = [];
         versionNumber = 1;
       }
+    } else {
+      const primaryParent = existingCommits.find(c => c.commitId === (Array.isArray(parents) ? parents[0] : parents));
+      if (primaryParent) {
+        versionNumber = (primaryParent.versionNumber || 1) + 1;
+        dedupStats = VersioningDAG.computeDeduplicationStats(chunks, primaryParent.chunks);
+      }
     }
 
-    // Calcul automatique de la racine Merkle hiérarchique si omise
+    // Calcul automatique de la racine Merkle si omise
     let merkleRoot = rootMerkleHash;
     if (!merkleRoot && Array.isArray(chunks) && chunks.length > 0) {
       merkleRoot = await MerkleTree.computeRoot(chunks.map(c => c.hash));
@@ -177,7 +250,6 @@ export class VersioningDAG {
 
     const timestamp = Date.now();
 
-    // Payload de commit structuré
     const commitPayload = {
       fileId,
       fileName,
@@ -194,10 +266,11 @@ export class VersioningDAG {
       timestamp,
       lamportClock,
       rootMerkleHash: merkleRoot,
+      dedupStats,
       chunks: (chunks || []).map(c => ({ index: c.index, hash: c.hash, size: c.size }))
     };
 
-    // Calcul de l'identifiant de commit 256-bit SHA-256
+    // Identifiant de commit canonique 256-bit SHA-256
     const canonicalStr = CryptoVault.canonicalize(commitPayload, ['signature']);
     const fullHash = await CryptoVault.hashSHA256(canonicalStr);
     commitPayload.commitId = `cmt_${fullHash}`;
@@ -207,7 +280,7 @@ export class VersioningDAG {
   }
 
   /**
-   * Récupère la liste des fichiers uniques avec leur dernière version active dans un dossier donné
+   * Récupère la liste des fichiers uniques avec leur dernière version active
    */
   static async getLatestFiles(folderPath = null) {
     const allCommits = await dbManager.getAllFileCommits();
@@ -223,7 +296,7 @@ export class VersioningDAG {
     }
 
     const filesList = [];
-    for (const [fileId, commits] of commitsByFile.entries()) {
+    for (const [, commits] of commitsByFile.entries()) {
       const { primaryHead, allHeads, isFork } = VersioningDAG.resolveDAGHeads(commits);
       if (primaryHead) {
         filesList.push({
@@ -252,10 +325,9 @@ export class VersioningDAG {
   }
 
   /**
-   * Crée un commit de restauration (Revert) après contrôle pré-vol de la disponibilité des blocs
+   * Crée un commit de restauration (Revert)
    */
   static async revertToVersion(targetCommit, authorName, authorPubkey = null, authorId = null) {
-    // Vérification pré-vol de la disponibilité locale des blocs
     for (const chunk of (targetCommit.chunks || [])) {
       const has = await dbManager.hasChunk(chunk.hash);
       if (!has) {

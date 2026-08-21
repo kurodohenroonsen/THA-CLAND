@@ -1,11 +1,11 @@
 {
   "name": "p2p-mesh-workspace",
   "version": "1.1.0",
-  "description": "Post-Quantum 100% Serverless P2P Mesh Workspace (Chrome Extension MV3 & PWA)",
+  "description": "Zero-Server E2EE P2P Mesh Workspace (Chrome Extension MV3 & PWA Standalone)",
   "type": "module",
   "scripts": {
-    "test": "node --test test/unit/*.test.js",
-    "test:fuzz": "node test/fuzz/crdt-convergence.test.js",
+    "test": "node --test test/unit/*.test.js --test-concurrency=1",
+    "test:fuzz": "node test/fuzz/crdt-convergence.test.js && node test/fuzz/crypto-adversarial-fuzz.test.js",
     "test:bench": "node test/bench/perf-benchmarks.js",
     "test:e2e": "playwright test",
     "parity": "node scripts/check-parity.js",

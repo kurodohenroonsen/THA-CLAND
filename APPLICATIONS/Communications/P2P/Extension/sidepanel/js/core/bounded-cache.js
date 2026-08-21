@@ -214,39 +214,68 @@ export class BoundedLRUCache {
  * Évite le GC thrashing et élimine les tempêtes d'écho en P2P.
  */
 export class GenerationalSlidingCache {
-  constructor({ generationSize = 20000, rotateIntervalMs = 90000 } = {}) {
+  constructor({
+    generationSize = 20000,
+    rotateIntervalMs = 90000,
+    minRotateIntervalMs = 15000
+  } = {}) {
     this.generationSize = generationSize;
     this.rotateIntervalMs = rotateIntervalMs;
+    this.minRotateIntervalMs = minRotateIntervalMs;
+    this.lastRotateTime = Date.now();
+
     this.generations = [new Set(), new Set(), new Set()]; // [Current, Previous, Old]
-    this.timer = setInterval(() => this.rotate(), this.rotateIntervalMs);
+    this.overflowSet = new Set();
+
+    this.timer = setInterval(() => this.rotate(false), this.rotateIntervalMs);
+    if (this.timer?.unref) this.timer.unref();
   }
 
   addIfNew(key) {
+    if (!key) return false;
     if (this.has(key)) return false;
+
     if (this.generations[0].size >= this.generationSize) {
-      this.rotate();
+      const now = Date.now();
+      if (now - this.lastRotateTime >= this.minRotateIntervalMs) {
+        this.rotate(true);
+      } else {
+        this.overflowSet.add(key);
+        return true;
+      }
     }
+
     this.generations[0].add(key);
     return true;
   }
 
   has(key) {
+    if (!key) return false;
     return this.generations[0].has(key) ||
            this.generations[1].has(key) ||
-           this.generations[2].has(key);
+           this.generations[2].has(key) ||
+           this.overflowSet.has(key);
   }
 
-  rotate() {
+  rotate(forced = false) {
+    this.lastRotateTime = Date.now();
     this.generations.pop();
-    this.generations.unshift(new Set());
+    const newGen = this.overflowSet.size > 0 ? new Set(this.overflowSet) : new Set();
+    this.overflowSet.clear();
+    this.generations.unshift(newGen);
   }
 
   get size() {
-    return this.generations[0].size + this.generations[1].size + this.generations[2].size;
+    return this.generations[0].size +
+           this.generations[1].size +
+           this.generations[2].size +
+           this.overflowSet.size;
   }
 
   clear() {
     this.generations = [new Set(), new Set(), new Set()];
+    this.overflowSet.clear();
+    this.lastRotateTime = Date.now();
   }
 
   destroy() {

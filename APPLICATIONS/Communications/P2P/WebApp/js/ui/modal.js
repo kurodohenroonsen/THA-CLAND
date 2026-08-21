@@ -1,17 +1,20 @@
 import { logger } from '../core/logger.js';
+import { i18n } from '../core/i18n.js';
+
 /**
  * Gestionnaire de Boîtes Modales Accessible (WCAG 2.2 / WAI-ARIA Dialog Pattern)
- * Supporte les ouvertures empilées, la fermeture au clic sur le fond dépoli,
- * la touche Échap, le confinement du focus (Focus Trap) et l'isolation inert.
+ * - Remplacement asynchrone Promise-based de confirm() et alert()
+ * - Support des ouvertures empilées, fermeture au clic extérieur et touche Échap
+ * - Confinement strict du focus (Focus Trap) et isolation inert
+ * - Support View Transitions API et prefers-reduced-motion
  */
-
 export class Modal {
   static _openStack = [];
   static _lastFocused = null;
   static _initialized = false;
 
   /**
-   * Ouvre une boîte modale par son ID
+   * Ouvre une boîte modale statique du DOM par son ID
    */
   static open(modalId) {
     const modal = document.getElementById(modalId);
@@ -23,21 +26,34 @@ export class Modal {
     Modal._ensureGlobalHandlers();
     Modal._lastFocused = document.activeElement;
 
-    modal.classList.add('modal-active');
-    modal.setAttribute('aria-hidden', 'false');
-    document.body.classList.add('modal-open');
+    const performOpen = () => {
+      modal.classList.add('modal-active');
+      modal.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('modal-open');
 
-    // Isolation de l'arrière-plan avec inert (Accessibilité)
-    const mainApp = document.getElementById('view-main-app');
-    const authView = document.getElementById('view-auth');
-    if (mainApp) mainApp.setAttribute('inert', '');
-    if (authView) authView.setAttribute('inert', '');
+      const mainApp = document.getElementById('view-main-app');
+      const authView = document.getElementById('view-auth');
+      const appHeader = document.querySelector('.app-header');
+      const appFooter = document.querySelector('.app-footer-statusbar');
+      if (mainApp) mainApp.setAttribute('inert', '');
+      if (authView) authView.setAttribute('inert', '');
+      if (appHeader) appHeader.setAttribute('inert', '');
+      if (appFooter) appFooter.setAttribute('inert', '');
 
-    if (!Modal._openStack.includes(modalId)) {
-      Modal._openStack.push(modalId);
+      if (!Modal._openStack.includes(modalId)) {
+        Modal._openStack.push(modalId);
+      }
+    };
+
+    const supportsViewTransition = typeof document.startViewTransition === 'function';
+    const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (supportsViewTransition && !prefersReducedMotion) {
+      document.startViewTransition(() => performOpen());
+    } else {
+      performOpen();
     }
 
-    // Déplacement accessible du focus dans la modale
     const focusables = Modal.getFocusableElements(modal);
     if (focusables.length > 0) {
       setTimeout(() => {
@@ -51,22 +67,37 @@ export class Modal {
    */
   static close(modalId) {
     const modal = document.getElementById(modalId);
-    if (modal) {
-      modal.classList.remove('modal-active');
-      modal.setAttribute('aria-hidden', 'true');
+
+    const performClose = () => {
+      if (modal) {
+        modal.classList.remove('modal-active');
+        modal.setAttribute('aria-hidden', 'true');
+      }
+
+      Modal._openStack = Modal._openStack.filter(id => id !== modalId);
+
+      if (Modal._openStack.length === 0) {
+        document.body.classList.remove('modal-open');
+        const mainApp = document.getElementById('view-main-app');
+        const authView = document.getElementById('view-auth');
+        const appHeader = document.querySelector('.app-header');
+        const appFooter = document.querySelector('.app-footer-statusbar');
+        if (mainApp) mainApp.removeAttribute('inert');
+        if (authView) authView.removeAttribute('inert');
+        if (appHeader) appHeader.removeAttribute('inert');
+        if (appFooter) appFooter.removeAttribute('inert');
+      }
+    };
+
+    const supportsViewTransition = typeof document.startViewTransition === 'function';
+    const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (supportsViewTransition && !prefersReducedMotion) {
+      document.startViewTransition(() => performClose());
+    } else {
+      performClose();
     }
 
-    Modal._openStack = Modal._openStack.filter(id => id !== modalId);
-
-    if (Modal._openStack.length === 0) {
-      document.body.classList.remove('modal-open');
-      const mainApp = document.getElementById('view-main-app');
-      const authView = document.getElementById('view-auth');
-      if (mainApp) mainApp.removeAttribute('inert');
-      if (authView) authView.removeAttribute('inert');
-    }
-
-    // Restauration du focus sur l'élément d'origine
     if (Modal._lastFocused && typeof Modal._lastFocused.focus === 'function') {
       try {
         Modal._lastFocused.focus();
@@ -87,22 +118,172 @@ export class Modal {
   }
 
   /**
-   * Récupère la liste des éléments recevant le focus clavier
+   * Remplacement moderne, asynchrone et accessible de window.confirm()
+   * @param {string} message - Message explicatif
+   * @param {string} [title] - Titre de la boîte de dialogue
+   * @param {object} [options] - Options { confirmText, cancelText, isDanger }
+   * @returns {Promise<boolean>}
    */
-  static getFocusableElements(container) {
-    return Array.from(container.querySelectorAll(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )).filter(el => el.offsetParent !== null);
+  static confirm(message, title = null, options = {}) {
+    return new Promise((resolve) => {
+      Modal._ensureGlobalHandlers();
+      Modal._lastFocused = document.activeElement;
+
+      const dynamicId = `modal-confirm-${Date.now()}`;
+      const dialog = document.createElement('div');
+      dialog.id = dynamicId;
+      dialog.className = 'modal-overlay modal-active';
+      dialog.setAttribute('role', 'alertdialog');
+      dialog.setAttribute('aria-modal', 'true');
+      dialog.setAttribute('aria-labelledby', `${dynamicId}-title`);
+      dialog.setAttribute('aria-describedby', `${dynamicId}-desc`);
+
+      const defaultTitle = title || i18n.t('modals.confirm_title');
+      const confirmLabel = options.confirmText || i18n.t('modals.btn_confirm');
+      const cancelLabel = options.cancelText || i18n.t('modals.btn_cancel');
+      const isDanger = options.isDanger !== false;
+
+      dialog.innerHTML = `
+        <div class="modal-content" style="max-width: 400px;">
+          <div class="modal-header">
+            <h3 id="${dynamicId}-title" class="modal-title">${defaultTitle}</h3>
+            <button class="modal-close-btn" data-modal-action="cancel" aria-label="${i18n.t('modals.btn_close')}">&times;</button>
+          </div>
+          <div class="modal-body">
+            <p id="${dynamicId}-desc" style="font-size: 13.5px; color: var(--text-secondary); line-height: 1.5; margin: 0;">${message}</p>
+          </div>
+          <div class="modal-footer" style="justify-content: flex-end; gap: 8px;">
+            <button class="btn btn-secondary btn-sm" data-modal-action="cancel">${cancelLabel}</button>
+            <button class="btn ${isDanger ? 'btn-danger' : 'btn-primary'} btn-sm" data-modal-action="confirm">${confirmLabel}</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(dialog);
+      document.body.classList.add('modal-open');
+      Modal._openStack.push(dynamicId);
+
+      const cleanup = (result) => {
+        Modal._openStack = Modal._openStack.filter(id => id !== dynamicId);
+        dialog.remove();
+        if (Modal._openStack.length === 0) {
+          document.body.classList.remove('modal-open');
+          const mainApp = document.getElementById('view-main-app');
+          const authView = document.getElementById('view-auth');
+          const appHeader = document.querySelector('.app-header');
+          const appFooter = document.querySelector('.app-footer-statusbar');
+          if (mainApp) mainApp.removeAttribute('inert');
+          if (authView) authView.removeAttribute('inert');
+          if (appHeader) appHeader.removeAttribute('inert');
+          if (appFooter) appFooter.removeAttribute('inert');
+        }
+        if (Modal._lastFocused && typeof Modal._lastFocused.focus === 'function') {
+          try { Modal._lastFocused.focus(); } catch (_) {}
+        }
+        resolve(result);
+      };
+
+      dialog.addEventListener('click', (e) => {
+        const actionBtn = e.target.closest('[data-modal-action]');
+        if (actionBtn) {
+          const action = actionBtn.getAttribute('data-modal-action');
+          cleanup(action === 'confirm');
+        } else if (e.target === dialog) {
+          cleanup(false);
+        }
+      });
+
+      const confirmBtn = dialog.querySelector('[data-modal-action="confirm"]');
+      if (confirmBtn) setTimeout(() => confirmBtn.focus(), 40);
+    });
   }
 
   /**
-   * Enregistre les gestionnaires d'événements globaux
+   * Remplacement moderne, asynchrone et accessible de window.alert()
+   * @param {string} message - Message d'information
+   * @param {string} [title] - Titre de l'alerte
+   * @param {string} [okText] - Libellé du bouton OK
+   * @returns {Promise<void>}
    */
+  static alert(message, title = null, okText = null) {
+    return new Promise((resolve) => {
+      Modal._ensureGlobalHandlers();
+      Modal._lastFocused = document.activeElement;
+
+      const dynamicId = `modal-alert-${Date.now()}`;
+      const dialog = document.createElement('div');
+      dialog.id = dynamicId;
+      dialog.className = 'modal-overlay modal-active';
+      dialog.setAttribute('role', 'alertdialog');
+      dialog.setAttribute('aria-modal', 'true');
+      dialog.setAttribute('aria-labelledby', `${dynamicId}-title`);
+      dialog.setAttribute('aria-describedby', `${dynamicId}-desc`);
+
+      const defaultTitle = title || i18n.t('modals.alert_title');
+      const btnLabel = okText || i18n.t('modals.btn_ok');
+
+      dialog.innerHTML = `
+        <div class="modal-content" style="max-width: 380px;">
+          <div class="modal-header">
+            <h3 id="${dynamicId}-title" class="modal-title">${defaultTitle}</h3>
+            <button class="modal-close-btn" data-modal-action="ok" aria-label="${i18n.t('modals.btn_close')}">&times;</button>
+          </div>
+          <div class="modal-body">
+            <p id="${dynamicId}-desc" style="font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin: 0;">${message}</p>
+          </div>
+          <div class="modal-footer" style="justify-content: flex-end;">
+            <button class="btn btn-primary btn-sm" data-modal-action="ok">${btnLabel}</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(dialog);
+      document.body.classList.add('modal-open');
+      Modal._openStack.push(dynamicId);
+
+      const cleanup = () => {
+        Modal._openStack = Modal._openStack.filter(id => id !== dynamicId);
+        dialog.remove();
+        if (Modal._openStack.length === 0) {
+          document.body.classList.remove('modal-open');
+          const mainApp = document.getElementById('view-main-app');
+          const authView = document.getElementById('view-auth');
+          const appHeader = document.querySelector('.app-header');
+          const appFooter = document.querySelector('.app-footer-statusbar');
+          if (mainApp) mainApp.removeAttribute('inert');
+          if (authView) authView.removeAttribute('inert');
+          if (appHeader) appHeader.removeAttribute('inert');
+          if (appFooter) appFooter.removeAttribute('inert');
+        }
+        if (Modal._lastFocused && typeof Modal._lastFocused.focus === 'function') {
+          try { Modal._lastFocused.focus(); } catch (_) {}
+        }
+        resolve();
+      };
+
+      dialog.addEventListener('click', (e) => {
+        if (e.target.closest('[data-modal-action="ok"]') || e.target === dialog) {
+          cleanup();
+        }
+      });
+
+      const okBtn = dialog.querySelector('[data-modal-action="ok"]');
+      if (okBtn) setTimeout(() => okBtn.focus(), 40);
+    });
+  }
+
+  static getFocusableElements(container) {
+    return Array.from(
+      container.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((el) => el.offsetParent !== null);
+  }
+
   static _ensureGlobalHandlers() {
-    if (Modal._initialized) return;
+    if (Modal._initialized || typeof document === 'undefined') return;
     Modal._initialized = true;
 
-    // Fermeture avec Échap et Focus Trap avec Tab / Shift+Tab
     document.addEventListener('keydown', (e) => {
       if (Modal._openStack.length === 0) return;
       const topModalId = Modal._openStack[Modal._openStack.length - 1];
@@ -128,7 +309,6 @@ export class Modal {
       }
     });
 
-    // Délégation de fermeture sur les boutons et overlays
     document.addEventListener('click', (e) => {
       if (e.target.matches('[data-close-modal]') || e.target.closest('[data-close-modal]')) {
         const modal = e.target.closest('.modal-overlay');
@@ -137,5 +317,9 @@ export class Modal {
         Modal.close(e.target.id);
       }
     });
+  }
+
+  static setupCloseTriggers() {
+    Modal._ensureGlobalHandlers();
   }
 }

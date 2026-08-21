@@ -1,8 +1,9 @@
 /**
- * Application Principale - P2P Mesh Workspace (2025/2026 Hardened Edition)
+ * Application Principale - P2P Mesh Workspace (Pass 4 Hardened Edition)
  * Orchestration globale : WebCrypto, WebRTC Mesh, CRDT, Storage Persistant,
  * PowerManager (Screen Wake Lock), OS Interop (Clipboard, Web Share, Drag & Drop),
- * WCO (Window Controls Overlay) et Keepalive MV3.
+ * WCO (Window Controls Overlay), i18n sans framework, Command Palette, A11y Announcer,
+ * Thèmes dynamiques WCAG 2.2 AAA & Échelle de densité DTCG.
  */
 
 import { logger } from './core/logger.js';
@@ -14,6 +15,8 @@ import { CRDTEngine } from './core/crdt-engine.js';
 import { powerManager } from './core/power-manager.js';
 import { installGlobalDropGuard, ClipboardService, ZeroTraceClipboard } from './core/os-interop.js';
 import { titleManager } from './core/title-manager.js';
+import { i18n } from './core/i18n.js';
+import { a11yAnnouncer } from './core/a11y-announcer.js';
 import { AuthController } from './modules/auth/auth-controller.js';
 import { ChatController } from './modules/chat/chat-controller.js';
 import { ForumController } from './modules/chat/forum-controller.js';
@@ -21,6 +24,8 @@ import { DriveController } from './modules/drive/drive-controller.js';
 import { CallController } from './modules/media/call-controller.js';
 import { Modal } from './ui/modal.js';
 import { Toast } from './ui/toast.js';
+import { CommandPalette } from './ui/command-palette.js';
+import { EmptyStateService } from './ui/empty-state-service.js';
 import { SanitizerService } from './core/sanitizer.js';
 
 class P2PApp {
@@ -35,6 +40,7 @@ class P2PApp {
     this.forumController = null;
     this.driveController = null;
     this.callController = null;
+    this.commandPalette = null;
 
     this.currentTab = 'chat';
     this.keepalivePort = null;
@@ -42,14 +48,28 @@ class P2PApp {
   }
 
   async init() {
-    // 0. Vérification du contexte sécurisé
+    // 0. Initialisation des services d'accessibilité et d'internationalisation
+    a11yAnnouncer.init();
+
+    // Vérification du contexte sécurisé
     if (typeof window !== 'undefined' && (!window.isSecureContext || !window.crypto?.subtle)) {
       console.error('[App] Arrêt critique : Contexte non sécurisé (HTTP). WebCrypto et WebRTC indisponibles.');
-      alert('Contexte non sécurisé : P2P Mesh requiert HTTPS ou localhost pour exécuter les opérations cryptographiques.');
+      await Modal.alert(
+        'Contexte non sécurisé : P2P Mesh requiert HTTPS ou localhost pour exécuter les opérations cryptographiques.',
+        'Erreur Critique'
+      );
       return;
     }
 
-    // 1. Installation du garde-fou global Drag & Drop (Anti-Crash sur drop accidentel de fichier)
+    // Initialisation i18n
+    try {
+      const savedLang = localStorage.getItem('pmesh.lang');
+      await i18n.init(savedLang);
+    } catch (e) {
+      logger.warn('App', 'Initialisation i18n dégradée:', e);
+    }
+
+    // 1. Installation du garde-fou global Drag & Drop
     installGlobalDropGuard();
 
     // 2. Initialisation des gestionnaires d'évacuation matérielle & anti-leak
@@ -70,29 +90,36 @@ class P2PApp {
 
     // 3. Initialisation du logger et keepalive MV3
     logger.installGlobalHandlers();
-    logger.info('App', '🌟 Démarrage de P2P Mesh Workspace...');
+    logger.info('App', '🌟 Démarrage de P2P Mesh Workspace (Pass 4 Hardened)...');
     this.initServiceWorkerKeepalive();
     this.initWindowControlsAndInstall();
 
-    // 4. Initialisation du stockage persistant
+    // 4. Initialisation des systèmes de Thème et Densité
+    this.initThemeManager();
+    this.initDensityManager();
+
+    // 5. Initialisation du stockage persistant
     logger.debug('App', '📦 Étape 1 : Initialisation IndexedDB & OPFS...');
     await dbManager.init();
 
-    // 5. Configuration des modales
+    // 6. Configuration des modales
     logger.debug('App', '🪟 Étape 2 : Configuration des déclencheurs de modales...');
     Modal.setupCloseTriggers();
 
-    // 6. Initialisation de l'authentification
+    // 7. Initialisation de l'authentification
     logger.debug('App', '🔑 Étape 3 : Initialisation du contrôleur d\'authentification...');
     this.authController = new AuthController(this.vault, (initializedVault) => {
       this.handleUserAuthenticated(initializedVault);
     });
 
-    // 7. Vérification de session enregistrée
+    // 8. Initialisation de la Palette de Commandes (Ctrl+K / Cmd+K)
+    this.commandPalette = new CommandPalette(this);
+
+    // 9. Vérification de session enregistrée
     logger.debug('App', '💾 Étape 4 : Vérification de session persistante...');
     await this.authController.checkSavedSession();
 
-    // 8. Configuration de la navigation par onglets
+    // 10. Configuration de la navigation par onglets
     logger.debug('App', '🧭 Étape 5 : Configuration de la navigation...');
     this.initNavigation();
 
@@ -101,200 +128,210 @@ class P2PApp {
   }
 
   /**
-   * Canal Keepalive Port pour éviter l'extinction du Service Worker en cours d'utilisation active
+   * Gestionnaire de Thème (Dark / Light / Auto OS / High Contrast)
    */
-  initServiceWorkerKeepalive() {
-    if (typeof chrome !== 'undefined' && chrome.runtime?.connect) {
-      try {
-        this.keepalivePort = chrome.runtime.connect({ name: 'sidepanel-lifecycle' });
-        // Heartbeat toutes les 20s (inférieur au timeout SW de 30s)
-        setInterval(() => {
-          try {
-            this.keepalivePort?.postMessage({ type: 'PING' });
-          } catch (_) {
-            // Reconnexion automatique si déconnecté
-            try { this.keepalivePort = chrome.runtime.connect({ name: 'sidepanel-lifecycle' }); } catch (_) {}
+  initThemeManager() {
+    try {
+      const savedTheme = localStorage.getItem('pmesh.theme') || 'auto';
+      this.applyTheme(savedTheme);
+
+      if (typeof window !== 'undefined' && window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+          const current = localStorage.getItem('pmesh.theme') || 'auto';
+          if (current === 'auto') {
+            this.applyTheme('auto');
           }
-        }, 20000);
-      } catch (err) {
-        logger.debug('App', 'Port keepalive SW non disponible:', err);
+        });
       }
+    } catch (e) {
+      logger.debug('App', 'Erreur initThemeManager:', e);
     }
+  }
+
+  applyTheme(theme) {
+    if (typeof document === 'undefined') return;
+    if (theme === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else if (theme === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    try { localStorage.setItem('pmesh.theme', theme); } catch (_) {}
   }
 
   /**
-   * Gestion de l'installation PWA et du bouton Pop-Out détachable
+   * Gestionnaire de Densité UI (DTCG Standard : compact / standard / comfort)
    */
-  initWindowControlsAndInstall() {
-    // Bouton Pop-Out (Détacher vers fenêtre autonome)
-    const btnPopout = document.getElementById('btn-popout-window');
-    if (btnPopout) {
-      btnPopout.addEventListener('click', () => {
-        if (typeof chrome !== 'undefined' && chrome.windows?.create) {
-          chrome.windows.create({
-            url: chrome.runtime.getURL('sidepanel/index.html'),
-            type: 'popup',
-            width: 980,
-            height: 740
-          });
-        } else {
-          window.open(window.location.href, '_blank', 'width=980,height=740,menubar=no,toolbar=no');
-        }
-      });
-    }
-
-    // Gestion de l'installation PWA (beforeinstallprompt)
-    const btnInstall = document.getElementById('btn-install-app');
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      this.deferredInstallPrompt = e;
-      if (btnInstall) {
-        btnInstall.classList.remove('hidden');
-        btnInstall.onclick = async () => {
-          if (!this.deferredInstallPrompt) return;
-          this.deferredInstallPrompt.prompt();
-          const choice = await this.deferredInstallPrompt.userChoice;
-          if (choice.outcome === 'accepted') {
-            Toast.success('Application P2P Mesh installée avec succès !');
-          }
-          this.deferredInstallPrompt = null;
-          btnInstall.classList.add('hidden');
-        };
-      }
-    });
-
-    window.addEventListener('appinstalled', () => {
-      logger.info('App', '🎉 PWA P2P Mesh installée sur le système.');
-      if (btnInstall) btnInstall.classList.add('hidden');
-      document.body.classList.add('is-standalone');
-    });
-
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-      document.body.classList.add('is-standalone');
+  initDensityManager() {
+    try {
+      const savedDensity = localStorage.getItem('pmesh.density') || 'standard';
+      this.applyDensity(savedDensity);
+    } catch (e) {
+      logger.debug('App', 'Erreur initDensityManager:', e);
     }
   }
 
-  async handleUserAuthenticated(vault) {
-    logger.info('App', '🚀 Utilisateur authentifié ! Démarrage des sous-systèmes P2P...');
+  applyDensity(density) {
+    if (typeof document === 'undefined') return;
+    const target = ['compact', 'standard', 'comfort'].includes(density) ? density : 'standard';
+    document.documentElement.setAttribute('data-density', target);
+    try { localStorage.setItem('pmesh.density', target); } catch (_) {}
 
-    const authView = document.getElementById('view-auth');
-    const mainView = document.getElementById('view-main-app');
-    if (authView) authView.classList.add('hidden');
-    if (mainView) mainView.classList.remove('hidden');
+    document.querySelectorAll('.density-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-density-val') === target);
+    });
+  }
 
-    const topicIndicator = document.getElementById('header-topic-id');
-    if (topicIndicator) {
-      topicIndicator.textContent = `Salon : ${vault.topicHex.substring(0, 8)}...`;
+  initWindowControlsAndInstall() {
+    const isOverlayVisible = typeof navigator !== 'undefined' && 
+      navigator.windowControlsOverlay && 
+      navigator.windowControlsOverlay.visible;
+    if (isOverlayVisible) {
+      document.body.classList.add('wco-active');
     }
 
-    // 1. Démarrage du réseau P2P Mesh
-    logger.debug('App', '🌐 Instanciation du P2PMeshNetwork...');
+    if (typeof navigator !== 'undefined' && navigator.windowControlsOverlay) {
+      navigator.windowControlsOverlay.addEventListener('geometrychange', (e) => {
+        if (e.visible) document.body.classList.add('wco-active');
+        else document.body.classList.remove('wco-active');
+      });
+    }
+
+    const btnInstall = document.getElementById('btn-pwa-install');
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      this.deferredInstallPrompt = e;
+      if (btnInstall) btnInstall.classList.remove('hidden');
+    });
+
+    if (btnInstall) {
+      btnInstall.addEventListener('click', async () => {
+        if (!this.deferredInstallPrompt) return;
+        this.deferredInstallPrompt.prompt();
+        const choice = await this.deferredInstallPrompt.userChoice;
+        if (choice.outcome === 'accepted') {
+          Toast.success(i18n.t('app.installed_success'));
+        }
+        this.deferredInstallPrompt = null;
+        btnInstall.classList.add('hidden');
+      });
+    }
+
+    window.addEventListener('appinstalled', () => {
+      if (btnInstall) btnInstall.classList.add('hidden');
+      this.deferredInstallPrompt = null;
+    });
+
+    const btnPopout = document.getElementById('btn-popout-window');
+    if (btnPopout) {
+      btnPopout.addEventListener('click', () => {
+        const url = window.location.href;
+        window.open(url, '_blank', 'width=420,height=720,menubar=no,toolbar=no,location=no,status=no');
+      });
+    }
+  }
+
+  initServiceWorkerKeepalive() {
+    if (typeof chrome === 'undefined' || !chrome.runtime?.connect) return;
+    try {
+      this.keepalivePort = chrome.runtime.connect({ name: 'p2p-mesh-keepalive' });
+      this.keepalivePort.onDisconnect.addListener(() => {
+        logger.debug('App', 'Port keepalive déconnecté. Reconnexion dans 5s...');
+        setTimeout(() => this.initServiceWorkerKeepalive(), 5000);
+      });
+      logger.debug('App', 'Canal Keepalive MV3 connecté au Service Worker.');
+    } catch (err) {
+      logger.debug('App', 'Contexte standard (hors extension Chrome). Keepalive non requis.');
+    }
+  }
+
+  handleUserAuthenticated(vault) {
+    logger.info('App', `🚀 Démarrage des sous-systèmes pour "${vault.userName}" (Topic: ${vault.topicHex.substring(0, 8)}...)`);
+    
+    // Déclencheur Screen Wake Lock dès authentification
+    powerManager.requestWakeLock('Espace de travail P2P actif');
+
+    document.getElementById('view-auth').classList.add('hidden');
+    document.getElementById('view-main-app').classList.remove('hidden');
+
     this.mesh = new P2PMeshNetwork(vault);
+    this.presence = new PresenceManager(this.mesh, vault);
+    this.crdt = new CRDTEngine(this.mesh, vault, this.presence);
 
-    // 2. Démarrage de la présence et de la télémétrie
-    logger.debug('App', '👥 Instanciation de PresenceManager...');
-    this.presence = new PresenceManager(this.mesh);
-    this.presence.start();
-
-    // 3. Démarrage du moteur CRDT
-    logger.debug('App', '⚙️ Instanciation de CRDTEngine...');
-    this.crdt = new CRDTEngine(this.mesh, vault);
-
-    // 4. Initialisation des contrôleurs fonctionnels
-    logger.debug('App', '💬 Initialisation des contrôleurs...');
     this.chatController = new ChatController(this.crdt, vault);
     this.forumController = new ForumController(this.crdt, vault);
     this.driveController = new DriveController(this.crdt, this.mesh, vault);
     this.callController = new CallController(this.mesh, this.presence, vault);
 
-    this.chatController.attachTransfer(this.driveController.transferManager, this.mesh);
-
-    // 5. Écouteurs de statut réseau et présence
-    this.initStatusListeners();
-
-    // 6. Lancement du réseau et signalement
-    logger.info('App', '📡 Lancement de la connexion P2P Mesh...');
-    await this.mesh.start();
-
-    // 7. Panneau de réglages & diagnostic
+    this.initAppEvents();
     this.setupSettingsPanel(vault);
-    const gear = document.getElementById('btn-open-settings');
-    if (gear) gear.classList.remove('hidden');
 
-    // 8. Chargement initial des données
-    logger.debug('App', '📂 Chargement initial des données locales...');
-    await this.chatController.loadChannelMessages('general');
-    await this.forumController.loadThreads();
-    await this.driveController.loadFiles();
+    this.mesh.start();
+    this.presence.start();
 
-    // 9. Restauration du dernier onglet actif
-    try {
-      const lastTab = await dbManager.getSetting('active_tab', 'chat');
-      if (lastTab && lastTab !== 'chat') this.switchTab(lastTab);
-    } catch (e) {
-      logger.debug('App', 'Erreur restauration active_tab:', e);
-    }
+    // Rétablissement du dernier onglet
+    dbManager.getSetting('active_tab', 'chat').then(savedTab => {
+      this.switchTab(savedTab);
+    });
 
-    // 10. Initialisation de l'Offscreen Document pour le maintien WebRTC
-    try {
-      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-        chrome.runtime.sendMessage({ type: 'INIT_OFFSCREEN' }).catch(() => {});
-      }
-    } catch (err) {
-      logger.debug('App', 'Offscreen document non requis:', err);
-    }
-
-    Toast.success('Connecté au réseau P2P Décentralisé !');
+    Toast.success(i18n.t('app.connected_success'));
+    a11yAnnouncer.announcePolite(i18n.t('app.connected_success'));
   }
 
-  initStatusListeners() {
-    const statusDot = document.getElementById('network-status-dot');
+  initAppEvents() {
     const statusText = document.getElementById('network-status-text');
-    const peersBadge = document.getElementById('header-peers-count');
-    const footerPeers = document.getElementById('footer-connected-peers');
-    const footerLatency = document.getElementById('footer-latency');
+    const statusDot = document.getElementById('network-status-dot');
+    const footerPeersCount = document.getElementById('footer-peers-count');
+    const footerLatency = document.getElementById('footer-avg-latency');
+    const footerQuality = document.getElementById('footer-conn-quality');
 
-    this.mesh.on('status-change', ({ status, peersCount, message }) => {
-      logger.info('App', `📶 Statut réseau changé: "${status}" (${peersCount || 0} pairs) - ${message}`);
-      if (statusDot) {
-        statusDot.className = `status-dot ${status === 'connected' ? 'online' : 'connecting'}`;
-      }
+    this.presence.on('roster-updated', (roster) => {
+      const peerList = Array.from(roster.values());
+      const connectedCount = this.mesh.peers.size;
+
       if (statusText) {
-        statusText.textContent = status === 'connected' ? 'En Ligne (P2P)' : 'Recherche de pairs...';
+        statusText.textContent = connectedCount > 0
+          ? `${connectedCount} pair(s) connecté(s)`
+          : i18n.t('app.status_connecting');
       }
-      if (peersBadge) {
-        peersBadge.textContent = `👥 ${peersCount || 0}`;
-      }
-      if (footerPeers) {
-        footerPeers.textContent = `${peersCount || 0} pair(s) connecté(s)`;
+      if (statusDot) {
+        statusDot.className = `status-dot ${connectedCount > 0 ? 'online' : 'connecting'}`;
       }
 
-      // Mise à jour du titre de l'action / infobulle (sans polluer le badge de messages)
-      try {
-        if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-          chrome.runtime.sendMessage({ type: 'UPDATE_PEERS_COUNT', peersCount: peersCount || 0 }).catch(() => {});
-        }
-      } catch (e) {
-        logger.debug('App', 'Erreur mise à jour peers count:', e);
+      if (footerPeersCount) {
+        footerPeersCount.textContent = i18n.t('footer.peers_count', { count: connectedCount });
+      }
+
+      this.renderPeersRoster(peerList);
+
+      if (this.callController) {
+        this.callController.updateVideoGrid();
       }
     });
 
-    this.presence.onPresenceUpdate((peerList) => {
-      this.renderPeersRoster(peerList);
+    this.mesh.on('peer-connected', ({ peerId }) => {
+      Toast.info(`Nouveau pair connecté : ${peerId.substring(0, 8)}`);
+      a11yAnnouncer.announcePolite(`Pair ${peerId.substring(0, 8)} connecté.`);
+    });
 
-      const footerQuality = document.getElementById('footer-quality');
-      if (peerList.length > 0) {
-        const avgLat = Math.round(peerList.reduce((acc, p) => acc + (p.latencyMs || 0), 0) / peerList.length);
-        const minMos = peerList.reduce((min, p) => Math.min(min, p.qos?.mos || 4.5), 4.5);
-        if (footerLatency) footerLatency.textContent = `⚡ Latence : ${avgLat} ms`;
+    this.mesh.on('peer-disconnected', ({ peerId }) => {
+      Toast.warn(`Pair déconnecté : ${peerId.substring(0, 8)}`);
+      a11yAnnouncer.announcePolite(`Pair ${peerId.substring(0, 8)} déconnecté.`);
+    });
+
+    this.mesh.on('metrics-updated', (metrics) => {
+      if (metrics.connectedCount > 0) {
+        if (footerLatency) footerLatency.textContent = i18n.t('footer.latency', { ms: metrics.avgLatencyMs });
         if (footerQuality) {
-          let cls, label;
-          if (minMos >= 4.1) { cls = 'q-excellent'; label = `Excellente (${minMos.toFixed(1)})`; }
-          else if (minMos >= 3.6) { cls = 'q-good'; label = `Bonne (${minMos.toFixed(1)})`; }
-          else if (minMos >= 2.8) { cls = 'q-medium'; label = `Dégradée (${minMos.toFixed(1)})`; }
-          else { cls = 'q-poor'; label = `Critique (${minMos.toFixed(1)})`; }
-          footerQuality.className = `conn-quality ${cls}`;
-          footerQuality.textContent = label;
+          footerQuality.className = `conn-quality quality-${metrics.quality}`;
+          const qMap = {
+            excellent: i18n.t('footer.quality_excellent', { score: metrics.mosScore }),
+            good: i18n.t('footer.quality_good', { score: metrics.mosScore }),
+            medium: i18n.t('footer.quality_medium', { score: metrics.mosScore }),
+            poor: i18n.t('footer.quality_poor', { score: metrics.mosScore })
+          };
+          footerQuality.textContent = qMap[metrics.quality] || metrics.quality;
         }
       } else {
         if (footerLatency) footerLatency.textContent = '⚡ Latence : -- ms';
@@ -330,25 +367,42 @@ class P2PApp {
       logger.debug('App', 'Erreur sauvegarde active_tab:', e);
     }
 
-    const tabLabels = { chat: 'Messagerie', forum: 'Forums & Sujets', drive: 'Drive & Documents', media: 'Salons Vocaux/Vidéo' };
+    const tabLabels = {
+      chat: i18n.t('nav.chat_title'),
+      forum: i18n.t('nav.forum_title'),
+      drive: i18n.t('nav.drive_title'),
+      media: i18n.t('nav.media_title'),
+      roster: i18n.t('roster.title')
+    };
     titleManager.setSection(tabLabels[tabName] || tabName);
 
     if (tabName === 'chat' && this.chatController) this.chatController.markActiveChannelRead();
 
-    document.querySelectorAll('.nav-tab-btn').forEach(btn => {
-      const isTarget = btn.getAttribute('data-tab') === tabName;
-      btn.classList.toggle('active', isTarget);
-      btn.setAttribute('aria-selected', isTarget ? 'true' : 'false');
-      btn.setAttribute('tabindex', isTarget ? '0' : '-1');
-    });
+    const updateDOM = () => {
+      document.querySelectorAll('.nav-tab-btn').forEach(btn => {
+        const isTarget = btn.getAttribute('data-tab') === tabName;
+        btn.classList.toggle('active', isTarget);
+        btn.setAttribute('aria-selected', isTarget ? 'true' : 'false');
+        btn.setAttribute('tabindex', isTarget ? '0' : '-1');
+      });
 
-    document.querySelectorAll('.view-section').forEach(view => {
-      if (view.id === `tab-view-${tabName}`) {
-        view.classList.remove('hidden');
-      } else {
-        view.classList.add('hidden');
-      }
-    });
+      document.querySelectorAll('.view-section').forEach(view => {
+        if (view.id === `tab-view-${tabName}`) {
+          view.classList.remove('hidden');
+        } else {
+          view.classList.add('hidden');
+        }
+      });
+    };
+
+    const supportsVT = typeof document.startViewTransition === 'function';
+    const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (supportsVT && !prefersReducedMotion) {
+      document.startViewTransition(() => updateDOM());
+    } else {
+      updateDOM();
+    }
 
     if (tabName === 'forum' && this.forumController) {
       this.forumController.loadThreads();
@@ -373,24 +427,21 @@ class P2PApp {
       <div class="peer-details">
         <div class="peer-name-row">
           <strong>${this.escape(this.vault.userName)}</strong>
-          <span class="badge badge-version">Vous</span>
+          <span class="badge badge-version">${i18n.t('roster.you_badge')}</span>
         </div>
         <div class="peer-meta-row">
-          <span>Identifiant : <code>${this.vault.peerId}</code></span>
+          <span>${i18n.t('roster.id_label')} <code>${this.vault.peerId}</code></span>
         </div>
       </div>
     `;
     container.appendChild(selfCard);
 
     if (peerList.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'empty-state';
-      empty.innerHTML = `
-        <div class="empty-icon">📡</div>
-        <p>En attente d'autres membres sur ce groupe...</p>
-        <small>Partagez votre Code Papier pour qu'ils vous rejoignent.</small>
-      `;
-      container.appendChild(empty);
+      const emptyState = EmptyStateService.renderRosterEmptyState(
+        this.vault,
+        () => { if (this.mesh) this.mesh.handleNetworkOnline(); }
+      );
+      container.appendChild(emptyState);
       return;
     }
 
@@ -432,6 +483,39 @@ class P2PApp {
     const logSelect = document.getElementById('settings-loglevel');
     const debugInput = document.getElementById('settings-debug-filter');
     const btnReqPersist = document.getElementById('btn-request-persistence');
+    const langSelect = document.getElementById('settings-language-select');
+    const themeSelect = document.getElementById('settings-theme-select');
+
+    // Initialisation sélecteur de langue
+    if (langSelect) {
+      langSelect.value = i18n.locale;
+      langSelect.addEventListener('change', async () => {
+        const targetLang = langSelect.value;
+        await i18n.setLocale(targetLang);
+        try { localStorage.setItem('pmesh.lang', targetLang); } catch (_) {}
+        Toast.success(targetLang === 'fr' ? 'Langue modifiée en Français.' : 'Language set to English.');
+      });
+    }
+
+    // Initialisation sélecteur de thème
+    if (themeSelect) {
+      try {
+        themeSelect.value = localStorage.getItem('pmesh.theme') || 'auto';
+      } catch (_) {}
+      themeSelect.addEventListener('change', () => {
+        this.applyTheme(themeSelect.value);
+        Toast.info('Thème visuel mis à jour.');
+      });
+    }
+
+    // Initialisation des boutons de densité
+    document.querySelectorAll('.density-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const val = btn.getAttribute('data-density-val');
+        this.applyDensity(val);
+        Toast.info(`Densité d'affichage : ${val}`);
+      });
+    });
 
     const flashCopy = async (btn, text, isSensitive = false) => {
       const ok = isSensitive
@@ -443,9 +527,9 @@ class P2PApp {
         btn.textContent = '✓';
         btn.classList.add('copied-flash');
         setTimeout(() => { btn.textContent = o; btn.classList.remove('copied-flash'); }, 1400);
-        if (isSensitive) Toast.info('Code copié ! Auto-purge du presse-papier dans 45s.');
+        if (isSensitive) Toast.info(i18n.t('app.clipboard_copied'));
       } else {
-        Toast.warning('Impossible d\'accéder au presse-papier.');
+        Toast.warning(i18n.t('app.clipboard_error'));
       }
     };
 
@@ -458,7 +542,7 @@ class P2PApp {
 
       if (paperEl) {
         paperEl.dataset.code = '';
-        paperEl.textContent = '🔒 Masqué (Zéro-Trace RAM)';
+        paperEl.textContent = i18n.t('modals.masked_paper_code');
       }
       if (notifChk) notifChk.checked = await dbManager.getSetting('notifications_enabled', false);
 
@@ -487,9 +571,9 @@ class P2PApp {
       btnReqPersist.addEventListener('click', async () => {
         const res = await dbManager.requestPersistenceInteractive();
         if (res.granted) {
-          Toast.success('Stockage persistant garanti par le navigateur !');
+          Toast.success(i18n.t('app.persisted_granted'));
         } else {
-          Toast.warning('Persistance refusée ou restreinte par le navigateur.');
+          Toast.warning(i18n.t('app.persisted_denied'));
         }
         await this.refreshStorageUI();
       });
@@ -508,15 +592,17 @@ class P2PApp {
 
     const selectMic = document.getElementById('select-audio-input');
     if (selectMic && this.callController) {
-      selectMic.addEventListener('change', () => {
-        this.callController.mediaManager.selectedAudioInputId = selectMic.value;
+      selectMic.addEventListener('change', async () => {
+        const newDeviceId = selectMic.value;
+        await this.callController.switchAudioInput(newDeviceId);
       });
     }
 
     const selectCam = document.getElementById('select-video-input');
     if (selectCam && this.callController) {
-      selectCam.addEventListener('change', () => {
-        this.callController.mediaManager.selectedVideoInputId = selectCam.value;
+      selectCam.addEventListener('change', async () => {
+        const newDeviceId = selectCam.value;
+        await this.callController.switchVideoInput(newDeviceId);
       });
     }
 
@@ -525,7 +611,7 @@ class P2PApp {
     if (btnSaveName && nameInput) {
       btnSaveName.addEventListener('click', async () => {
         const newName = nameInput.value.trim();
-        if (!newName) { Toast.warning('Le pseudonyme ne peut pas être vide.'); return; }
+        if (!newName) { Toast.warning(i18n.t('app.name_required')); return; }
         vault.userName = newName;
         await dbManager.saveSetting('user_name', newName);
         if (idNameEl) idNameEl.textContent = newName;
@@ -534,7 +620,7 @@ class P2PApp {
         } catch (err) {
           logger.warn('App', 'Échec diffusion PEER_HELLO:', err);
         }
-        Toast.success('Pseudonyme mis à jour.');
+        Toast.success(i18n.t('app.name_updated'));
       });
     }
 
@@ -544,13 +630,12 @@ class P2PApp {
     if (notifChk) {
       notifChk.addEventListener('change', async () => {
         if (notifChk.checked) {
-          // Gestion des permissions optionnelles en contexte MV3
           if (typeof chrome !== 'undefined' && chrome.permissions?.request) {
             try {
               const granted = await chrome.permissions.request({ permissions: ['notifications'] });
               if (!granted) {
                 notifChk.checked = false;
-                Toast.warning('Permission notification refusée par Chrome.');
+                Toast.warning(i18n.t('app.notif_permission_denied'));
                 return;
               }
             } catch (_) {}
@@ -607,17 +692,23 @@ class P2PApp {
           a.click();
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
-          Toast.success('Rapport de diagnostic exporté !');
+          Toast.success(i18n.t('app.diag_exported'));
         } catch (err) {
           logger.error('App', 'Échec export diagnostic:', err);
-          Toast.error('Impossible d\'exporter le rapport.');
+          Toast.error(i18n.t('app.diag_export_failed'));
         }
       });
     }
 
     if (btnLogout) {
       btnLogout.addEventListener('click', async () => {
-        if (!confirm('Se déconnecter et effacer la session locale ?')) return;
+        const confirmed = await Modal.confirm(
+          i18n.t('app.logout_confirm_msg'),
+          i18n.t('app.logout_confirm_title'),
+          { isDanger: true }
+        );
+        if (!confirmed) return;
+
         try { await dbManager.delete('settings', 'last_paper_code'); } catch (_) {}
         try { this.callController?.isInCall && this.callController.leaveCall(); } catch {}
         try { this.mesh?.stop(); } catch (_) {}
@@ -625,7 +716,7 @@ class P2PApp {
         try { this.crdt?.destroy(); } catch {}
         try { this.vault?.destroy(); } catch {}
         logger.clearBuffer();
-        Toast.info('Déconnexion…');
+        Toast.info(i18n.t('app.logout_toast'));
         setTimeout(() => location.reload(), 500);
       });
     }
@@ -660,7 +751,6 @@ class P2PApp {
       const bar = document.getElementById(barId), txt = document.getElementById(txtId);
       if (bar) {
         bar.style.width = `${Math.min(100, pct)}%`;
-        // Palette 4 paliers (Cyan, Jaune 75%, Orange 85%, Rose 95%)
         if (pct >= 95) bar.style.background = 'var(--accent-rose)';
         else if (pct >= 85) bar.style.background = '#f97316';
         else if (pct >= 75) bar.style.background = 'var(--accent-amber)';

@@ -1,18 +1,56 @@
 import { logger } from './logger.js';
 import { Multibase, Multicodec } from './did-codec.js';
-import { DIDDocumentResolver } from './did-resolver.js';
+import { DIDUniversalResolver, DIDDocumentResolver } from './did-resolver.js';
 import { SenderKeysManager } from './sender-keys.js';
+import { SecureMemorySanitizer, RevocableCryptoKey } from './secure-memory-sanitizer.js';
 
 /**
- * Coffre-fort Cryptographique Web Crypto API - P2P Mesh (Pass 2 - 2026)
- * - Dérivation PBKDF2-SHA512 (600k) + HKDF
- * - Identité Souveraine W3C DID Core (did:key:z... / did:peer:2...) & Résolution locale O(1)
- * - Chiffrement de Groupe Signal Sender Keys O(1) + KDF Ratchet & Skipped Keys Store
- * - Chiffrement AES-GCM-256 (Nonces partitionnés déterministes & AAD)
- * - Signatures ECDSA P-256 (RFC 8785 JCS & W3C Data Integrity Proofs)
- * - Accord de clés Pairwise ECDH P-256 & Memory Scrubbing
+ * Cache LRU Bounded pour CryptoKey importées (ECDSA, ECDH, HKDF)
+ * Évite le re-parsing ASN.1 SPKI coûteux sur les flux P2P continus
  */
+export class CryptoKeyCache {
+  constructor(maxSize = 1024) {
+    this.maxSize = maxSize;
+    this.cache = new Map();
+  }
 
+  get(keyId) {
+    const key = this.cache.get(keyId);
+    if (key) {
+      this.cache.delete(keyId);
+      this.cache.set(keyId, key);
+      return key;
+    }
+    return null;
+  }
+
+  set(keyId, cryptoKey) {
+    if (this.cache.size >= this.maxSize) {
+      const oldestKey = this.cache.keys().next().value;
+      this.cache.delete(oldestKey);
+    }
+    this.cache.set(keyId, cryptoKey);
+  }
+
+  clear() {
+    this.cache.clear();
+  }
+
+  get size() {
+    return this.cache.size;
+  }
+}
+
+/**
+ * Coffre-fort Cryptographique Web Crypto API - P2P Mesh (Pass 4 Hardened - 2026)
+ * - Dérivation PBKDF2-SHA512 (600k) + HKDF-SHA256 (RFC 5869)
+ * - Identité Souveraine W3C DID Core (did:key / did:peer:2)
+ * - Signal Sender Keys O(1) + Single-Pass 512b Ratchet
+ * - Chiffrement AES-GCM-256 (Nonces partitionnés déterministes 96b & AAD)
+ * - Signatures ECDSA P-256 (RFC 8785 JCS, CryptoKey Cache & Batch Verification)
+ * - Accord de clés Pairwise ECDH P-256 durci HKDF + Combinateur Hybride Post-Quantique (X-Wing)
+ * - Memory Zeroization (SecureMemorySanitizer) & Lookup Tables Zero-Allocation
+ */
 export class CryptoVault {
   constructor() {
     this.masterKey = null;
@@ -40,7 +78,41 @@ export class CryptoVault {
     this._nonceCounter = 0n;
   }
 
+  static _pubKeyCache = new CryptoKeyCache(1024);
+
   static _byteToHex = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
+
+  static _HEX_DECODE_TABLE = (() => {
+    const table = new Int16Array(256).fill(-1);
+    for (let i = 0; i < 10; i++) table[48 + i] = i; // '0'-'9'
+    for (let i = 0; i < 6; i++) {
+      table[65 + i] = 10 + i; // 'A'-'F'
+      table[97 + i] = 10 + i; // 'a'-'f'
+    }
+    return table;
+  })();
+
+  /**
+   * Comparaison en temps constant de deux chaînes ou ArrayBuffers (Anti-Timing Attacks)
+   */
+  static constantTimeEqual(a, b) {
+    if (typeof a === 'string' && typeof b === 'string') {
+      if (a.length !== b.length) return false;
+      let diff = 0;
+      for (let i = 0; i < a.length; i++) {
+        diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+      }
+      return diff === 0;
+    }
+    const aBytes = a instanceof Uint8Array ? a : (a?.buffer ? new Uint8Array(a.buffer) : null);
+    const bBytes = b instanceof Uint8Array ? b : (b?.buffer ? new Uint8Array(b.buffer) : null);
+    if (!aBytes || !bBytes || aBytes.length !== bBytes.length) return false;
+    let diff = 0;
+    for (let i = 0; i < aBytes.length; i++) {
+      diff |= aBytes[i] ^ bBytes[i];
+    }
+    return diff === 0;
+  }
 
   /**
    * Convertit un ArrayBuffer en chaîne hexadécimale ultra-rapide
@@ -56,16 +128,26 @@ export class CryptoVault {
   }
 
   /**
-   * Convertit une chaîne hexadécimale en ArrayBuffer
+   * Convertit une chaîne hexadécimale en ArrayBuffer sans allocation de sous-chaînes
    */
   static hexToBuffer(hex) {
     if (typeof hex !== 'string') {
       throw new TypeError(`Attendu une chaîne hexadécimale, reçu: ${typeof hex}`);
     }
     const cleanHex = hex.trim();
-    const bytes = new Uint8Array(cleanHex.length / 2);
-    for (let i = 0; i < cleanHex.length; i += 2) {
-      bytes[i / 2] = parseInt(cleanHex.substr(i, 2), 16);
+    const len = cleanHex.length;
+    if (len % 2 !== 0) {
+      throw new Error('Longueur hexadécimale invalide (doit être paire)');
+    }
+    const bytes = new Uint8Array(len >> 1);
+    const table = CryptoVault._HEX_DECODE_TABLE;
+    for (let i = 0; i < len; i += 2) {
+      const hi = table[cleanHex.charCodeAt(i)];
+      const lo = table[cleanHex.charCodeAt(i + 1)];
+      if (hi === -1 || lo === -1) {
+        throw new Error(`Caractère hexadécimal invalide à la position ${i}`);
+      }
+      bytes[i >> 1] = (hi << 4) | lo;
     }
     return bytes.buffer;
   }
@@ -74,16 +156,27 @@ export class CryptoVault {
    * Écrase de manière sécurisée un ArrayBuffer ou TypedArray en mémoire vive (Memory Zeroization)
    */
   static wipeBuffer(bufferOrArray) {
-    if (!bufferOrArray) return;
-    try {
-      const view = bufferOrArray instanceof Uint8Array 
-        ? bufferOrArray 
-        : (bufferOrArray.buffer ? new Uint8Array(bufferOrArray.buffer) : new Uint8Array(bufferOrArray));
-      crypto.getRandomValues(view);
-      view.fill(0);
-    } catch {
-      // Ignorer si tampon verrouillé
+    return SecureMemorySanitizer.wipe(bufferOrArray);
+  }
+
+  /**
+   * Importation de clé publique avec mise en cache LRU haute performance
+   */
+  static async importPublicKey(publicKeyHex, algorithm = { name: 'ECDSA', namedCurve: 'P-256' }, keyUsages = ['verify']) {
+    const cacheKey = `${algorithm.name}:${algorithm.namedCurve || ''}:${keyUsages.join(',')}:${publicKeyHex}`;
+    let pubKey = CryptoVault._pubKeyCache.get(cacheKey);
+    if (!pubKey) {
+      const pubKeyBuffer = CryptoVault.hexToBuffer(publicKeyHex);
+      pubKey = await crypto.subtle.importKey(
+        'spki',
+        pubKeyBuffer,
+        algorithm,
+        false,
+        keyUsages
+      );
+      CryptoVault._pubKeyCache.set(cacheKey, pubKey);
     }
+    return pubKey;
   }
 
   /**
@@ -182,11 +275,11 @@ export class CryptoVault {
   }
 
   /**
-   * Génère un Nonce partitionné déterministe de 96 bits (12 octets)
+   * Génère un Nonce partitionné déterministe de 96 bits (12 octets, NIST SP 800-38D)
    */
   _generateDeterministicNonce() {
     const nonce = new Uint8Array(12);
-    nonce.set(this._nodeNoncePrefix, 0); // 4 octets préfixe nœud
+    nonce.set(this._nodeNoncePrefix, 0);
 
     this._nonceCounter += 1n;
     let count = this._nonceCounter;
@@ -198,7 +291,7 @@ export class CryptoVault {
   }
 
   /**
-   * Initialise le coffre-fort depuis un code papier
+   * Initialise le coffre-fort depuis un code papier (PBKDF2-SHA512 + HKDF)
    */
   async initializeFromPaperCode(paperCode, customName = 'Membre P2P') {
     if (!CryptoVault.validatePaperCode(paperCode)) {
@@ -214,7 +307,7 @@ export class CryptoVault {
     try {
       logger.info('Vault', `🔐 Démarrage dérivation cryptographique (Utilisateur: "${customName}")`);
 
-      // 1. Dérivation PBKDF2-SHA512 (600 000 itérations)
+      // 1. Dérivation PBKDF2-SHA512 (600 000 itérations conforme OWASP)
       const baseKey = await crypto.subtle.importKey(
         'raw',
         codeBuffer,
@@ -232,7 +325,7 @@ export class CryptoVault {
           hash: 'SHA-512'
         },
         baseKey,
-        512 // 64 octets d'entropie maîtresse
+        512
       );
 
       // 2. Importation de la clé HKDF Maîtresse
@@ -255,7 +348,7 @@ export class CryptoVault {
           info: encoder.encode('mesh-topic-identifier-v1')
         },
         hkdfMasterKey,
-        160 // 20 octets pour compatibilité info_hash WebTorrent
+        160
       );
       this.topicId = topicBytes;
       this.topicHex = CryptoVault.bufferToHex(topicBytes);
@@ -319,11 +412,11 @@ export class CryptoVault {
         const multicodecPayload = Multicodec.addPrefix(Multicodec.P256_PUB, compressedPub);
         this.publicKeyMultibase = Multibase.encodeBase58Btc(multicodecPayload);
         this.did = `did:key:${this.publicKeyMultibase}`;
-        this.didPeer = DIDDocumentResolver.createDidPeer2({
+        this.didPeer = DIDUniversalResolver.createDidPeer2({
           signingMultibase: this.publicKeyMultibase,
           signalingEndpoint: `pmesh://topic/${this.topicHex}`
         });
-        this.didDocument = DIDDocumentResolver.resolve(this.did).didDocument;
+        this.didDocument = DIDUniversalResolver.resolve(this.did).didDocument;
       } catch {
         this.did = `did:key:raw_${this.publicKeyHex.substring(0, 32)}`;
       }
@@ -337,12 +430,8 @@ export class CryptoVault {
       this.peerId = `peer_${this.peerIdHex.substring(0, 16)}`;
       this.userName = customName;
     } finally {
-      // Nettoyage Zéro-Trace en RAM des tampons transitoires
-      CryptoVault.wipeBuffer(codeBuffer);
-      if (masterDeriveBits) {
-        CryptoVault.wipeBuffer(masterDeriveBits);
-        masterDeriveBits = null;
-      }
+      SecureMemorySanitizer.wipeAll(codeBuffer, masterDeriveBits);
+      masterDeriveBits = null;
     }
 
     this.isInitialized = true;
@@ -455,25 +544,92 @@ export class CryptoVault {
   }
 
   /**
-   * Primitives d'accord de clés ECDH P-256
+   * Primitives d'accord de clés ECDH P-256 durcies avec HKDF-SHA256 (NIST SP 800-56C & RFC 5869)
    */
-  static async derivePairwiseKey(localPrivateKey, remotePublicKeySPKIHex) {
-    const remoteKeyBuffer = CryptoVault.hexToBuffer(remotePublicKeySPKIHex);
-    const remotePublicKey = await crypto.subtle.importKey(
-      'spki',
-      remoteKeyBuffer,
+  static async derivePairwiseKey(localPrivateKey, remotePublicKeySPKIHex, contextOptions = {}) {
+    const remotePublicKey = await CryptoVault.importPublicKey(
+      remotePublicKeySPKIHex,
       { name: 'ECDH', namedCurve: 'P-256' },
-      false,
       []
     );
 
-    return await crypto.subtle.deriveKey(
+    const sharedSecretBits = await crypto.subtle.deriveBits(
       { name: 'ECDH', public: remotePublicKey },
       localPrivateKey,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
+      256
     );
+
+    const encoder = new TextEncoder();
+    const saltBytes = contextOptions.salt 
+      ? (typeof contextOptions.salt === 'string' ? encoder.encode(contextOptions.salt) : contextOptions.salt)
+      : encoder.encode('P2P_PAIRWISE_ECDH_SALT_V1');
+    const infoBytes = contextOptions.info
+      ? (typeof contextOptions.info === 'string' ? encoder.encode(contextOptions.info) : contextOptions.info)
+      : encoder.encode('pmesh-pairwise-session-key-v1');
+
+    try {
+      const hkdfKey = await crypto.subtle.importKey(
+        'raw',
+        sharedSecretBits,
+        { name: 'HKDF' },
+        false,
+        ['deriveKey']
+      );
+
+      return await crypto.subtle.deriveKey(
+        {
+          name: 'HKDF',
+          hash: 'SHA-256',
+          salt: saltBytes,
+          info: infoBytes
+        },
+        hkdfKey,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+      );
+    } finally {
+      SecureMemorySanitizer.wipe(sharedSecretBits);
+    }
+  }
+
+  /**
+   * Combinateur Hybride Post-Quantique (X-Wing / draft-connolly-cfrg-xwing-kem)
+   */
+  static async combineHybridPQSecrets(classicalSecret, pqSecret, contextInfo = null) {
+    const combinedSecret = new Uint8Array(classicalSecret.length + pqSecret.length);
+    combinedSecret.set(classicalSecret, 0);
+    combinedSecret.set(pqSecret, classicalSecret.length);
+
+    const encoder = new TextEncoder();
+    const salt = encoder.encode('PMESH_HYBRID_PQ_XWING_SALT_V1');
+    const info = contextInfo || encoder.encode('pmesh-hybrid-pq-session-key-v1');
+
+    let hkdfKey = null;
+    try {
+      hkdfKey = await crypto.subtle.importKey(
+        'raw',
+        combinedSecret,
+        { name: 'HKDF' },
+        false,
+        ['deriveKey']
+      );
+
+      return await crypto.subtle.deriveKey(
+        {
+          name: 'HKDF',
+          hash: 'SHA-256',
+          salt,
+          info
+        },
+        hkdfKey,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+      );
+    } finally {
+      SecureMemorySanitizer.wipe(combinedSecret);
+    }
   }
 
   /**
@@ -526,21 +682,15 @@ export class CryptoVault {
   }
 
   /**
-   * Vérifie une signature ECDSA P-256
+   * Vérifie une signature ECDSA P-256 avec cache de clé publique
    */
   static async verify(data, signatureHex, publicKeyHex, excludeFields = ['signature']) {
     if (!data || !signatureHex || !publicKeyHex) return false;
 
     try {
-      const pubKeyBuffer = CryptoVault.hexToBuffer(publicKeyHex);
-      const pubKey = await crypto.subtle.importKey(
-        'spki',
-        pubKeyBuffer,
-        {
-          name: 'ECDSA',
-          namedCurve: 'P-256'
-        },
-        false,
+      const pubKey = await CryptoVault.importPublicKey(
+        publicKeyHex,
+        { name: 'ECDSA', namedCurve: 'P-256' },
         ['verify']
       );
 
@@ -565,7 +715,7 @@ export class CryptoVault {
   }
 
   /**
-   * Vérifie un objet auto-signé avec exclusion de signature
+   * Vérifie un objet auto-signé avec exclusion de signature et liaison d'identité stricte
    */
   static async verifyObject(obj, options = {}) {
     if (!obj || typeof obj !== 'object') return false;
@@ -580,17 +730,125 @@ export class CryptoVault {
 
     if (!sigHex || !pubHex) return false;
 
-    // Vérification de la concordance de l'identifiant du pair avec sa clé publique
+    // Vérification stricte de concordance PeerID <=> PublicKey (Anti-Usurpation)
     if (obj[idField]) {
       const computedHash = await CryptoVault.hashSHA256(pubHex);
       const expectedPrefix = `peer_${computedHash.substring(0, 16)}`;
-      if (obj[idField] !== expectedPrefix && !obj[idField].startsWith('peer_')) {
+      if (obj[idField] !== expectedPrefix) {
+        logger.warn('Vault', `Usurpation d'identifiant détectée : ${obj[idField]} != ${expectedPrefix}`);
         return false;
       }
     }
 
     const excluded = [signatureField, ...extraExcluded];
     return await CryptoVault.verify(obj, sigHex, pubHex, excluded);
+  }
+
+  /**
+   * Vérification Batch Concurrente de Signatures ECDSA
+   */
+  static async verifyBatch(items, options = {}) {
+    if (!Array.isArray(items) || items.length === 0) {
+      return { allValid: true, results: [], failures: [] };
+    }
+
+    const concurrency = Math.max(1, options.concurrency || 8);
+    const failFast = Boolean(options.failFast);
+    const results = new Array(items.length).fill(false);
+    const failures = [];
+    let hasFailed = false;
+
+    let cursor = 0;
+    const processNext = async () => {
+      while (cursor < items.length) {
+        if (failFast && hasFailed) break;
+        const index = cursor++;
+        const item = items[index];
+        if (!item) {
+          failures.push({ index, error: 'Item nul ou indéfini' });
+          hasFailed = true;
+          continue;
+        }
+
+        try {
+          const isValid = await CryptoVault.verify(
+            item.data,
+            item.signatureHex,
+            item.publicKeyHex,
+            item.excludeFields
+          );
+          results[index] = isValid;
+          if (!isValid) {
+            failures.push({ index, error: 'Signature invalide' });
+            hasFailed = true;
+          }
+        } catch (err) {
+          results[index] = false;
+          failures.push({ index, error: err.message });
+          hasFailed = true;
+        }
+      }
+    };
+
+    const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => processNext());
+    await Promise.all(workers);
+
+    return {
+      allValid: failures.length === 0,
+      results,
+      failures
+    };
+  }
+
+  /**
+   * Vérification Batch d'Objets Signés
+   */
+  static async verifyBatchObjects(objects, options = {}) {
+    if (!Array.isArray(objects) || objects.length === 0) {
+      return { allValid: true, results: [], failures: [] };
+    }
+
+    const concurrency = Math.max(1, options.concurrency || 8);
+    const failFast = Boolean(options.failFast);
+    const results = new Array(objects.length).fill(false);
+    const failures = [];
+    let hasFailed = false;
+
+    let cursor = 0;
+    const processNext = async () => {
+      while (cursor < objects.length) {
+        if (failFast && hasFailed) break;
+        const index = cursor++;
+        const obj = objects[index];
+        if (!obj) {
+          failures.push({ index, error: 'Objet nul' });
+          hasFailed = true;
+          continue;
+        }
+
+        try {
+          const isValid = await CryptoVault.verifyObject(obj, options);
+          results[index] = isValid;
+          if (!isValid) {
+            failures.push({ index, error: 'Objet signé invalide ou altéré' });
+            hasFailed = true;
+          }
+        } catch (err) {
+          results[index] = false;
+          failures.push({ index, error: err.message });
+          hasFailed = true;
+        }
+      }
+    };
+
+    const workers = Array.from({ length: Math.min(concurrency, objects.length) }, () => processNext());
+    await Promise.all(workers);
+
+    return {
+      allValid: failures.length === 0,
+      results,
+      failures
+    };
   }
 
   /**
@@ -626,8 +884,7 @@ export class CryptoVault {
 
     const numeric = `${blocks.slice(0, 6).join(' ')}\n${blocks.slice(6, 12).join(' ')}`;
 
-    // 7 emojis déterministes dérivés des octets 48 à 54
-    const EMOJI_LIST = ['🐶','🐱','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐜','🐢','🐍','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳','鲨','🐊','🐅','🐆','🦓','🦍','🐘','🦛','🦏','🐪','🦒','🦘','🐃','🐂','🐄','🐎','🐖','🐏','🐑','🦙','🐐','🦌','🐕'];
+    const EMOJI_LIST = ['🐶','🐱','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐜','🐢','🐍','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳','🦈','🐊','🐅','🐆','🦓','🦍','🐘','🦛','🦏','🐪','🦒','🦘','🐃','🐂','🐄','🐎','🐖','🐏','🐑','🦙','🐐','🦌','🐕'];
     const emojis = [];
     for (let e = 0; e < 7; e++) {
       const byteVal = currentHash[48 + e] || 0;
@@ -683,18 +940,25 @@ export class CryptoVault {
     if (this.senderKeys) {
       try { this.senderKeys.destroy(); } catch {}
     }
+    CryptoVault._pubKeyCache.clear();
     this.masterKey = null;
     this.signalingKey = null;
     this.contentKey = null;
     this.signingKeyPair = null;
     this.ecdhKeyPair = null;
-    this.topicId = null;
+    if (this.topicId) {
+      SecureMemorySanitizer.wipe(this.topicId);
+      this.topicId = null;
+    }
     this.topicHex = null;
     this.peerId = null;
     this.peerIdHex = null;
     this.publicKeyHex = null;
     this.userName = null;
-    if (this._nodeNoncePrefix) CryptoVault.wipeBuffer(this._nodeNoncePrefix);
+    if (this._nodeNoncePrefix) {
+      SecureMemorySanitizer.wipe(this._nodeNoncePrefix);
+      this._nodeNoncePrefix = null;
+    }
     this._nonceCounter = 0n;
     this.isInitialized = false;
     this.isDestroyed = true;
@@ -702,7 +966,6 @@ export class CryptoVault {
   }
 }
 
-// --- Liste de mots OTAN étendue pour les codes papier (256 termes lisibles) ---
 CryptoVault.WORDLIST = (() => {
   const base = [
     'ALPHA','BRAVO','CHARLIE','DELTA','ECHO','FOXTROT','GOLF','HOTEL','INDIGO','JULIET',
@@ -744,5 +1007,4 @@ CryptoVault.WORDLIST = (() => {
   return list;
 })();
 
-// Coût PBKDF2 (600 000 itérations SHA-512 conforme OWASP 2025/2026)
 CryptoVault.PBKDF2_ITERATIONS = 600000;

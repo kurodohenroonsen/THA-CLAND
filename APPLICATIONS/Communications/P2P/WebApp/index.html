@@ -1,11 +1,12 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" dir="ltr" data-density="standard">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta name="theme-color" content="#0a0d14">
+  <meta name="theme-color" content="#080b11">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self' wss://tracker.openwebtorrent.com wss://tracker.btorrent.xyz wss://tracker.files.fm:7073 wss://tracker.novage.com.ua wss://relay.damus.io wss://relay.primal.net wss://relay.nostr.band wss://nos.lol https://*.metered.ca; font-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self';">
   <link rel="manifest" href="manifest.webmanifest">
-  <title>P2P Mesh - Espace Collaboratif Décentralisé</title>
+  <title data-i18n="app.title">P2P Mesh - Espace Collaboratif Décentralisé</title>
   
   <!-- Shim Plateforme Universel (Extension / PWA Web) -->
   <script src="js/platform-web.js"></script>
@@ -18,83 +19,89 @@
   <link rel="stylesheet" href="css/chat.css">
   <link rel="stylesheet" href="css/drive.css">
   <link rel="stylesheet" href="css/media.css">
+  <link rel="stylesheet" href="css/command-palette.css">
+  <link rel="stylesheet" href="css/empty-states.css">
   <link rel="stylesheet" href="css/enhancements.css">
   <link rel="stylesheet" href="css/mobile.css">
 </head>
 <body>
+  <!-- Conteneurs Globaux d'Annonces Vocales ARIA 1.3 (WCAG 2.2 AAA) -->
+  <div id="global-a11y-polite" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div id="global-a11y-assertive" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div>
+
   <div id="app-container">
 
     <!-- En-tête Principal (Support WCO & Multi-Fenêtres) -->
-    <header class="app-header">
+    <header class="app-header" role="banner">
       <div class="header-brand">
         <img src="icons/icon-32.png" alt="P2P Mesh Logo" class="brand-logo-img"/>
-        <span class="brand-title">P2P Mesh</span>
+        <span class="brand-title" data-i18n="app.brand_title">P2P Mesh</span>
       </div>
       <div class="header-stats">
-        <div class="status-pill">
+        <div class="status-pill" role="status">
           <span id="network-status-dot" class="status-dot"></span>
-          <span id="network-status-text">Hors-Ligne</span>
+          <span id="network-status-text" data-i18n="app.status_offline">Hors-Ligne</span>
         </div>
         <span id="header-peers-count" class="badge badge-version">👥 0</span>
-        <button id="btn-install-app" class="btn btn-secondary btn-xs hidden" title="Installer l'application P2P Mesh" aria-label="Installer l'application">📥 <span class="install-text">Installer</span></button>
-        <button id="btn-popout-window" class="icon-btn" title="Détacher vers une fenêtre autonome" aria-label="Détacher la fenêtre">⧉</button>
-        <button id="btn-open-settings" class="icon-btn hidden" title="Réglages & profil" aria-label="Réglages">⚙️</button>
+        <button id="btn-pwa-install" class="btn btn-secondary btn-xs hidden" title="Installer l'application P2P Mesh" aria-label="Installer l'application" data-i18n-attr="title:app.btn_install_title|aria-label:app.btn_install_title">📥 <span class="install-text" data-i18n="app.btn_install">Installer</span></button>
+        <button id="btn-popout-window" class="icon-btn" title="Détacher vers une fenêtre autonome" aria-label="Détacher la fenêtre" data-i18n-attr="title:app.btn_popout_title|aria-label:app.btn_popout_title">⧉</button>
+        <button id="btn-open-settings" class="icon-btn hidden" title="Réglages & profil" aria-label="Réglages" data-i18n-attr="title:app.btn_settings_title|aria-label:app.btn_settings_title">⚙️</button>
       </div>
     </header>
 
     <!-- VUE 1 : Authentification & Onboarding Code Papier -->
-    <section id="view-auth" class="view-section">
+    <section id="view-auth" class="view-section" role="region" aria-label="Authentification Décentralisée">
       <div class="auth-wrapper" style="padding: 24px 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto;">
         
         <div class="auth-hero" style="text-align: center;">
-          <div style="font-size: 40px; margin-bottom: 8px;">🔐</div>
-          <h2 style="font-size: 18px; margin-bottom: 4px;">Espace de Travail Décentralisé</h2>
-          <p style="font-size: 12px; color: var(--text-secondary);">
+          <div style="font-size: 40px; margin-bottom: 8px;" aria-hidden="true">🔐</div>
+          <h2 style="font-size: 18px; margin-bottom: 4px;" data-i18n="auth.hero_title">Espace de Travail Décentralisé</h2>
+          <p style="font-size: 12px; color: var(--text-secondary);" data-i18n="auth.hero_subtitle">
             100% Peer-to-Peer • Chiffrement E2EE • Zéro Serveur Central
           </p>
         </div>
 
         <div class="glass-card" style="background: var(--bg-secondary); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 18px;">
-          <h3 style="font-size: 14px; margin-bottom: 12px; color: var(--accent-cyan);">Rejoindre ou Créer un Groupe</h3>
+          <h3 style="font-size: 14px; margin-bottom: 12px; color: var(--accent-cyan);" data-i18n="auth.card_title">Rejoindre ou Créer un Groupe</h3>
           
           <div class="form-group">
-            <label class="form-label" for="input-user-name">Votre Pseudonyme</label>
-            <input type="text" id="input-user-name" class="form-control" placeholder="Ex: Alice" value="Membre P2P"/>
+            <label class="form-label" for="input-user-name" data-i18n="auth.label_username">Votre Pseudonyme</label>
+            <input type="text" id="input-user-name" class="form-control" placeholder="Ex: Alice" value="Membre P2P" data-i18n-attr="placeholder:auth.placeholder_username"/>
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="input-paper-code">Code Papier (Secret Hors-Ligne)</label>
+            <label class="form-label" for="input-paper-code" data-i18n="auth.label_paper_code">Code Papier (Secret Hors-Ligne)</label>
             <div class="input-with-action">
-              <input type="password" id="input-paper-code" class="form-control" placeholder="Ex: ALPHA-BRAVO-DELTA-ECHO-FALCON-GOLF-1234" autocomplete="off" spellcheck="false"/>
-              <button type="button" id="btn-reveal-code" class="input-reveal-btn" title="Afficher / masquer le code papier" aria-label="Afficher ou masquer le code papier">👁️</button>
+              <input type="password" id="input-paper-code" class="form-control" placeholder="Ex: ALPHA-BRAVO-DELTA-ECHO-FALCON-GOLF-1234" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder:auth.placeholder_paper_code"/>
+              <button type="button" id="btn-reveal-code" class="input-reveal-btn" title="Afficher / masquer le code papier" aria-label="Afficher ou masquer le code papier" data-i18n-attr="title:auth.reveal_code_title|aria-label:auth.reveal_code_title">👁️</button>
             </div>
             <div class="entropy-meter"><div id="entropy-fill" class="entropy-meter-fill"></div></div>
             <div class="entropy-label">
-              <span id="entropy-text">Saisissez ou générez un code</span>
+              <span id="entropy-text" data-i18n="auth.entropy_initial">Saisissez ou générez un code</span>
               <span id="entropy-bits"></span>
             </div>
           </div>
 
-          <button id="btn-join-group" class="btn btn-primary" style="width: 100%; margin-top: 4px;">
+          <button id="btn-join-group" class="btn btn-primary" style="width: 100%; margin-top: 4px;" data-i18n="auth.btn_join_group">
             Rejoindre le Groupe
           </button>
         </div>
 
         <div style="text-align: center;">
-          <span style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Ou commencez un nouveau groupe</span>
+          <span style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;" data-i18n="auth.or_start_group">Ou commencez un nouveau groupe</span>
         </div>
 
-        <button id="btn-generate-code" class="btn btn-secondary" style="width: 100%;">
+        <button id="btn-generate-code" class="btn btn-secondary" style="width: 100%;" data-i18n="auth.btn_generate_code">
           ✨ Générer un Nouveau Groupe & Code Papier
         </button>
 
         <div id="generated-code-box" class="glass-card hidden" style="background: rgba(6, 182, 212, 0.08); border: 1px dashed var(--accent-cyan); border-radius: var(--radius-md); padding: 12px; text-align: center;">
-          <div style="font-size: 11px; color: var(--accent-cyan); font-weight: 600; margin-bottom: 4px;">VOTRE CODE PAPIER MAÎTRE</div>
+          <div style="font-size: 11px; color: var(--accent-cyan); font-weight: 600; margin-bottom: 4px;" data-i18n="auth.master_box_title">VOTRE CODE PAPIER MAÎTRE</div>
           <div id="display-generated-code" style="font-family: var(--font-mono); font-size: 15px; font-weight: 700; color: #ffffff; letter-spacing: 0.05em; padding: 6px;"></div>
-          <p style="font-size: 10.5px; color: var(--text-muted); margin-bottom: 8px;">
+          <p style="font-size: 10.5px; color: var(--text-muted); margin-bottom: 8px;" data-i18n="auth.master_box_help">
             Notez ce code sur un papier physique hors réseau et transmettez-le aux membres du groupe.
           </p>
-          <button id="btn-copy-generated-code" class="btn btn-secondary btn-sm" style="width: 100%;" aria-label="Copier le code papier généré">
+          <button id="btn-copy-generated-code" class="btn btn-secondary btn-sm" style="width: 100%;" aria-label="Copier le code papier généré" data-i18n="auth.btn_copy_code">
             📋 Copier le Code
           </button>
         </div>
@@ -103,24 +110,24 @@
     </section>
 
     <!-- VUE 2 : Interface Principale de l'Espace Collaboratif -->
-    <main id="view-main-app" class="app-view-container hidden">
+    <main id="view-main-app" class="app-view-container hidden" role="main">
 
       <!-- Navigation par Onglets -->
       <nav class="app-navigation-tabs" role="tablist" aria-label="Navigation principale">
         <button class="nav-tab-btn active" data-tab="chat" role="tab" aria-selected="true" aria-controls="tab-view-chat">
-          <span class="tab-icon">💬</span> <span>Chat</span>
+          <span class="tab-icon" aria-hidden="true">💬</span> <span data-i18n="nav.chat">Chat</span>
         </button>
         <button class="nav-tab-btn" data-tab="forum" role="tab" aria-selected="false" aria-controls="tab-view-forum">
-          <span class="tab-icon">📑</span> <span>Forum</span>
+          <span class="tab-icon" aria-hidden="true">📑</span> <span data-i18n="nav.forum">Forum</span>
         </button>
         <button class="nav-tab-btn" data-tab="drive" role="tab" aria-selected="false" aria-controls="tab-view-drive">
-          <span class="tab-icon">📁</span> <span>Drive</span>
+          <span class="tab-icon" aria-hidden="true">📁</span> <span data-i18n="nav.drive">Drive</span>
         </button>
         <button class="nav-tab-btn" data-tab="media" role="tab" aria-selected="false" aria-controls="tab-view-media">
-          <span class="tab-icon">🎙️</span> <span>Salons</span>
+          <span class="tab-icon" aria-hidden="true">🎙️</span> <span data-i18n="nav.media">Salons</span>
         </button>
         <button class="nav-tab-btn" data-tab="roster" role="tab" aria-selected="false" aria-controls="tab-view-roster">
-          <span class="tab-icon">👥</span> <span>Membres</span>
+          <span class="tab-icon" aria-hidden="true">👥</span> <span data-i18n="nav.roster">Membres</span>
         </button>
       </nav>
 
@@ -131,22 +138,22 @@
         </div>
 
         <div class="chat-messages-wrapper">
-          <div id="chat-messages-list" class="chat-messages-container" aria-live="polite" aria-label="Historique des messages"></div>
+          <div id="chat-messages-list" class="chat-messages-container" role="log" aria-live="polite" aria-label="Historique des messages"></div>
           <!-- Pastille "nouveaux messages" affichée quand on n'est pas en bas -->
           <button id="chat-jump-latest" class="chat-jump-latest hidden" aria-label="Défiler jusqu'aux messages les plus récents">
-            <span id="chat-jump-count">Nouveaux messages</span> ↓
+            <span id="chat-jump-count" data-i18n="chat.jump_latest">Nouveaux messages</span> ↓
           </button>
         </div>
 
         <!-- Indicateur de saisie en temps réel (Typing Indicator) -->
         <div id="chat-typing-indicator" class="chat-typing-indicator hidden" aria-live="polite">
           <div class="typing-bubble">
-            <div class="typing-dots">
+            <div class="typing-dots" aria-hidden="true">
               <span class="dot"></span>
               <span class="dot"></span>
               <span class="dot"></span>
             </div>
-            <span id="chat-typing-text" class="typing-text">Un membre est en train d'écrire...</span>
+            <span id="chat-typing-text" class="typing-text" data-i18n="chat.typing_multiple">Un membre est en train d'écrire...</span>
           </div>
         </div>
 
@@ -158,10 +165,10 @@
 
         <div class="chat-input-area">
           <input type="file" id="chat-file-input" class="hidden" multiple accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"/>
-          <button id="btn-attach" class="icon-btn chat-input-icon" title="Joindre une photo, vidéo ou document" aria-label="Joindre un média">📎</button>
-          <button id="btn-emoji-toggle" class="icon-btn chat-input-icon" title="Emojis" aria-label="Emojis">😊</button>
-          <textarea id="chat-input-text" class="chat-input-box" rows="1" placeholder="Écrire un message chiffré…  (Entrée pour envoyer, Maj+Entrée = nouvelle ligne)" aria-label="Message à envoyer"></textarea>
-          <button id="btn-chat-send" class="btn btn-primary btn-sm" title="Envoyer le message (Entrée)" aria-label="Envoyer le message">➤</button>
+          <button id="btn-attach" class="icon-btn chat-input-icon" title="Joindre une photo, vidéo ou document" aria-label="Joindre un média" data-i18n-attr="title:chat.btn_attach_title|aria-label:chat.btn_attach_title">📎</button>
+          <button id="btn-emoji-toggle" class="icon-btn chat-input-icon" title="Emojis" aria-label="Emojis" data-i18n-attr="title:chat.btn_emoji_title|aria-label:chat.btn_emoji_title">😊</button>
+          <textarea id="chat-input-text" class="chat-input-box" rows="1" placeholder="Écrire un message chiffré… (Entrée pour envoyer, Maj+Entrée = nouvelle ligne)" aria-label="Message à envoyer" data-i18n-attr="placeholder:chat.input_placeholder|aria-label:chat.input_placeholder"></textarea>
+          <button id="btn-chat-send" class="btn btn-primary btn-sm" title="Envoyer le message (Entrée)" aria-label="Envoyer le message" data-i18n-attr="title:chat.btn_send_title|aria-label:chat.btn_send_title">➤</button>
         </div>
       </section>
 
@@ -172,7 +179,7 @@
         <div id="forum-threads-view" class="view-section">
           <div class="forum-toolbar">
             <select id="forum-category-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 11.5px;" aria-label="Filtrer les sujets par catégorie"></select>
-            <button id="btn-new-forum-topic" class="btn btn-primary btn-sm" aria-label="Créer un nouveau sujet de forum">✍️ Nouveau Sujet</button>
+            <button id="btn-new-forum-topic" class="btn btn-primary btn-sm" aria-label="Créer un nouveau sujet de forum" data-i18n="forum.btn_new_topic">✍️ Nouveau Sujet</button>
           </div>
           <div id="forum-threads-list" class="forum-threads-scroll"></div>
         </div>
@@ -180,7 +187,7 @@
         <!-- Détail d'un Sujet & Réponses -->
         <div id="forum-thread-detail-view" class="view-section hidden" style="overflow-y: auto;">
           <div style="padding: 8px 12px; background: var(--bg-secondary); border-bottom: 1px solid var(--border-subtle);">
-            <button id="btn-back-to-threads" class="btn btn-secondary btn-xs" aria-label="Retourner à la liste des sujets">⬅ Retour aux sujets</button>
+            <button id="btn-back-to-threads" class="btn btn-secondary btn-xs" aria-label="Retourner à la liste des sujets" data-i18n="forum.btn_back_to_threads">⬅ Retour aux sujets</button>
           </div>
           <div class="thread-detail-container">
             <div class="thread-detail-body">
@@ -189,290 +196,341 @@
               <div id="thread-detail-content" style="font-size: 13px; white-space: pre-wrap; line-height: 1.5;"></div>
             </div>
 
-            <h4 style="font-size: 12.5px; margin-top: 6px;">Réponses</h4>
+            <h4 style="font-size: 12.5px; margin-top: 6px;" data-i18n="forum.replies_header">Réponses</h4>
             <div id="thread-detail-replies" class="thread-detail-replies"></div>
 
             <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
-              <textarea id="forum-reply-input" class="form-control" placeholder="Ajouter une réponse..."></textarea>
-              <button id="btn-submit-forum-reply" class="btn btn-primary btn-sm" style="align-self: flex-end;" aria-label="Publier la réponse au sujet">Répondre</button>
+              <textarea id="forum-reply-input" class="form-control" placeholder="Ajouter une réponse..." data-i18n-attr="placeholder:forum.reply_placeholder"></textarea>
+              <button id="btn-submit-forum-reply" class="btn btn-primary btn-sm" style="align-self: flex-end;" aria-label="Publier la réponse au sujet" data-i18n="forum.btn_submit_reply">Répondre</button>
             </div>
           </div>
         </div>
 
       </section>
 
-      <!-- Onglet 3 : Drive Partagé & Versioning -->
-      <section id="tab-view-drive" class="view-section drive-container hidden" role="tabpanel" aria-label="Drive Partagé">
+      <!-- Onglet 3 : Drive & Explorateur de Fichiers P2P -->
+      <section id="tab-view-drive" class="view-section drive-container hidden" role="tabpanel" aria-label="Drive et Explorateur de Fichiers">
         
-        <!-- Barre d'actions & Arborescence Dossiers -->
-        <div class="drive-toolbar">
-          <div id="drive-breadcrumbs" class="drive-breadcrumbs"></div>
-          <button id="btn-create-folder" class="btn btn-secondary btn-sm" aria-label="Créer un nouveau dossier dans le Drive">📁 Nouveau Dossier</button>
+        <div class="drive-header-toolbar">
+          <nav class="drive-breadcrumbs" id="drive-breadcrumbs" aria-label="Fil d'Ariane du Drive"></nav>
+          <div class="drive-actions">
+            <button id="btn-create-folder" class="btn btn-secondary btn-xs" data-i18n="drive.btn_create_folder">📁 Nouveau Dossier</button>
+          </div>
         </div>
 
-        <!-- Indicateur d'espace de stockage local -->
-        <div id="drive-storage-indicator" class="drive-storage-indicator">
+        <!-- Jauge Stockage Local & Persistance -->
+        <div class="drive-storage-indicator">
           <div class="storage-meta">
-            <span>💾 Stockage local</span>
+            <span data-i18n="drive.storage_local">💾 Stockage local</span>
             <span id="drive-storage-text">—</span>
           </div>
           <div class="progress-bar-container">
-            <div id="drive-storage-bar" class="progress-bar-fill" style="width:0%"></div>
+            <div id="drive-storage-bar" class="progress-bar-fill" style="width: 0%;"></div>
           </div>
         </div>
 
-        <!-- Zone de Dépôt / Upload -->
-        <div id="drive-drop-zone" class="drive-drop-zone">
+        <!-- Zone de Glisser-Déposer / Téléversement -->
+        <div id="drive-dropzone" class="drive-dropzone" role="region" aria-label="Zone de téléversement de fichier">
           <input type="file" id="drive-file-input" class="hidden"/>
-          <div class="drop-icon">📤</div>
-          <div id="drive-drop-title" class="drop-title">Partager un fichier dans ce dossier</div>
-          <div class="drop-subtitle">Glissez-déposez ou cliquez pour sélectionner</div>
+          <div class="dropzone-icon" aria-hidden="true">📤</div>
+          <div class="dropzone-title" data-i18n="drive.drop_title">Partager un fichier dans ce dossier</div>
+          <div class="dropzone-sub" data-i18n="drive.drop_subtitle">Glissez-déposez ou cliquez pour sélectionner</div>
         </div>
 
-        <!-- Jauge d'Avancement Upload -->
-        <div id="drive-upload-progress-container" class="hidden">
-          <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted);">
-            <span>Découpage & Diffusion en cours...</span>
+        <!-- Statut d'envoi en cours -->
+        <div id="drive-upload-progress" class="drive-upload-progress hidden">
+          <div class="progress-info">
+            <span id="drive-upload-filename">Fichier.dat</span>
+            <span id="drive-upload-percent">0%</span>
           </div>
           <div class="progress-bar-container">
-            <div id="drive-upload-progress" class="progress-bar-fill"></div>
+            <div id="drive-upload-fill" class="progress-bar-fill"></div>
           </div>
+          <div id="drive-upload-status" class="drive-upload-status-text" data-i18n="drive.uploading_progress">Découpage & Diffusion en cours...</div>
         </div>
 
-        <!-- Dossiers & Sous-Dossiers -->
-        <div id="drive-folders-section">
-          <h4 style="font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;">Dossiers</h4>
+        <!-- Conteneur des Dossiers -->
+        <div class="drive-folders-section">
+          <h4 class="drive-section-title" data-i18n="drive.folders_title">Dossiers</h4>
           <div id="drive-folders-list" class="drive-folders-grid"></div>
         </div>
 
-        <!-- Liste des Fichiers Partagés -->
-        <div id="drive-files-section">
-          <h4 style="font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;">Fichiers du Répertoire</h4>
+        <!-- Liste des Fichiers dans le Dossier Courant -->
+        <div class="drive-files-section">
+          <h4 class="drive-section-title" data-i18n="drive.files_title">Fichiers du Répertoire</h4>
           <div id="drive-files-list" class="drive-files-list"></div>
         </div>
 
       </section>
 
-      <!-- Onglet 4 : Salons Vocaux & Vidéo Mesh -->
-      <section id="tab-view-media" class="view-section media-view-container hidden" role="tabpanel" aria-label="Salons Vocaux et Vidéo">
+      <!-- Onglet 4 : Salons Vocaux & Vidéo Mesh P2P -->
+      <section id="tab-view-media" class="view-section media-container hidden" role="tabpanel" aria-label="Salons Vocaux et Vidéo Mesh">
         
-        <div class="voice-room-banner">
-          <div class="voice-room-title">🎙️ Salon Vocal & Vidéo Mesh</div>
-          <div class="voice-room-desc">Appels directs chiffrés de pair à pair sans passer par aucun serveur central.</div>
-          <div id="call-status-indicator" style="font-size: 11px; color: var(--accent-emerald); font-weight: 600;">⚪ Salon inactif</div>
-          
-          <button id="btn-join-audio-room" class="btn btn-primary" aria-label="Rejoindre le salon vocal et vidéo">
-            Rejoindre le Salon
-          </button>
-          
-          <button id="btn-media-permissions" class="btn btn-secondary btn-xs" style="margin-top: 8px; font-size: 11px;" aria-label="Gérer les autorisations micro et caméra">
-            ⚙️ Autorisations Micro / Caméra
-          </button>
+        <div class="media-banner">
+          <div class="media-banner-info">
+            <h3 data-i18n="media.banner_title">🎙️ Salon Vocal & Vidéo Mesh</h3>
+            <p data-i18n="media.banner_desc">Appels directs chiffrés de pair à pair sans passer par aucun serveur central.</p>
+          </div>
+          <div class="media-status-tag" id="media-status-badge">
+            <span id="media-status-text" data-i18n="media.status_inactive">⚪ Salon inactif</span>
+          </div>
         </div>
 
-        <!-- Visualiseur de Fréquences Canvas -->
-        <div class="audio-visualizer-box">
-          <canvas id="audio-visualizer-canvas" width="300" height="48"></canvas>
+        <div class="media-view-container">
+          <!-- Grille Vidéo des Pairs & Rendu Mosaïque -->
+          <div id="media-video-grid" class="media-video-grid"></div>
+
+          <!-- Visualiseur Audio Fréquentiel -->
+          <div id="media-visualizer-box" class="media-visualizer-box hidden">
+            <canvas id="audio-visualizer-canvas" class="visualizer-canvas"></canvas>
+          </div>
+
+          <!-- Barre d'Action & Contrôles Médias Complète -->
+          <div class="call-controls-bar">
+            <button id="btn-join-call" class="btn btn-primary" data-i18n="media.btn_join_room">Rejoindre le Salon</button>
+            <button id="btn-media-permissions" class="btn btn-secondary btn-sm" title="Vérifier les autorisations audio/vidéo" data-i18n="media.btn_permissions">⚙️ Autorisations</button>
+            <button id="btn-call-mic" class="btn btn-secondary btn-control-action hidden" title="Couper / Activer le micro" aria-label="Microphone" data-i18n-attr="title:media.btn_mic|aria-label:media.btn_mic"><span class="control-icon">🎙️</span> <span>Micro</span></button>
+            <button id="btn-call-cam" class="btn btn-secondary btn-control-action hidden" title="Allumer / Éteindre la caméra" aria-label="Caméra" data-i18n-attr="title:media.btn_cam|aria-label:media.btn_cam"><span class="control-icon">📷</span> <span>Caméra</span></button>
+            <button id="btn-call-screen" class="btn btn-secondary btn-control-action hidden" title="Partager l'écran" aria-label="Partage d'écran" data-i18n-attr="title:media.btn_screen|aria-label:media.btn_screen"><span class="control-icon">🖥️</span> <span>Écran</span></button>
+            <button id="btn-call-spatial" class="btn btn-secondary btn-control-action hidden" title="Audio 3D Spatialisé (HRTF)" aria-label="Spatialisation audio" data-i18n-attr="title:media.btn_spatial|aria-label:media.btn_spatial"><span class="control-icon">🎧</span> <span>3D</span></button>
+            <button id="btn-call-pip" class="btn btn-secondary btn-control-action hidden" title="Mode Fenêtre Flottante (Picture-in-Picture)" aria-label="Picture-in-Picture" data-i18n-attr="title:media.btn_pip|aria-label:media.btn_pip"><span class="control-icon">🖼️</span> <span>PiP</span></button>
+            <button id="btn-leave-call" class="btn btn-danger btn-control-action hidden" title="Quitter le salon" aria-label="Quitter le salon" data-i18n-attr="title:media.btn_leave|aria-label:media.btn_leave"><span class="control-icon">⏹️</span> <span>Quitter</span></button>
+          </div>
         </div>
-
-        <!-- Mosaïque Vidéo Mesh -->
-        <div id="media-video-grid" class="media-video-grid"></div>
-
-        <!-- Contrôles d'Appel -->
-        <div id="call-control-bar" class="call-controls-bar hidden">
-          <button id="btn-toggle-mic" class="btn-control-action" aria-label="Activer ou couper le microphone" aria-keyshortcuts="M" aria-pressed="false">🎙️ Micro</button>
-          <button id="btn-toggle-camera" class="btn-control-action" aria-label="Activer ou couper la caméra" aria-keyshortcuts="V" aria-pressed="false">📷 Caméra</button>
-          <button id="btn-share-screen" class="btn-control-action" aria-label="Démarrer ou arrêter le partage d'écran" aria-pressed="false">🖥️ Écran</button>
-          <button id="btn-toggle-spatial" class="btn-control-action active" aria-label="Audio 3D Spatialisé" title="Positionnement sonore 3D" aria-pressed="true">🎧 3D</button>
-          <button id="btn-toggle-pip" class="btn-control-action" aria-label="Mode Picture-in-Picture" title="Fenêtre flottante PiP">🖼️ PiP</button>
-          <button id="btn-leave-call" class="btn-control-action btn-leave" aria-label="Quitter le salon vocal et vidéo">Quitter</button>
-        </div>
-
-        <!-- Live region d'accessibilité WCAG 2.2 pour les annonces audio -->
-        <div id="call-a11y-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
       </section>
 
-      <!-- Onglet 5 : Membres & Présence -->
-      <section id="tab-view-roster" class="view-section hidden" role="tabpanel" aria-label="Membres du Maillage P2P" style="padding: 12px; overflow-y: auto;">
-        <h4 style="font-size: 13px; margin-bottom: 8px; color: var(--text-secondary);">Membres du Maillage P2P</h4>
-        <div id="peers-roster-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+      <!-- Onglet 5 : Roster & Membres Connectés -->
+      <section id="tab-view-roster" class="view-section roster-container hidden" role="tabpanel" aria-label="Membres du Maillage">
+        <div style="padding: 12px 14px; background: var(--bg-secondary); border-bottom: 1px solid var(--border-subtle); font-size: 13px; font-weight: 600;" data-i18n="roster.title">
+          Membres du Maillage P2P
+        </div>
+        <div id="peers-roster-list" class="peers-roster-list" style="padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto;"></div>
       </section>
 
     </main>
 
-    <!-- Barre d'État Inférieure -->
-    <footer class="app-footer-statusbar">
-      <div class="statusbar-left">
-        <span id="header-topic-id">🔒 E2EE Décentralisé</span>
-        <span>•</span>
-        <span id="footer-connected-peers">0 pair connecté</span>
+    <!-- Pied de Page / Barre d'État Réseau -->
+    <footer class="app-footer-statusbar" role="contentinfo">
+      <div class="footer-left">
+        <span class="badge badge-active" data-i18n="footer.e2ee_badge">🔒 E2EE Décentralisé</span>
+        <span id="footer-peers-count" data-i18n="footer.peers_count_zero">0 pair connecté</span>
       </div>
-      <div class="statusbar-right">
-        <span id="footer-quality" class="conn-quality" title="Qualité de connexion"></span>
-        <span id="footer-latency">⚡ Latence : -- ms</span>
+      <div class="footer-right">
+        <span id="footer-avg-latency" class="footer-latency-tag">⚡ Latence : -- ms</span>
+        <span id="footer-conn-quality" class="conn-quality"></span>
       </div>
     </footer>
 
-    <!-- MODALE 1 : Création de Sujet Forum -->
-    <div id="modal-new-topic" class="modal-overlay">
+    <!-- ==========================================================================
+         BOÎTES MODALES ACCESSIBLES (WAI-ARIA Dialog Pattern)
+         ========================================================================== -->
+
+    <!-- MODALE 1 : Création de sujet Forum -->
+    <div id="modal-new-topic" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-new-topic-title">
       <div class="modal-content">
         <div class="modal-header">
-          <h3 class="modal-title">Nouveau Sujet de Forum</h3>
-          <button class="modal-close-btn" data-close-modal aria-label="Fermer la boîte de dialogue">&times;</button>
+          <h3 id="modal-new-topic-title" class="modal-title" data-i18n="modals.new_topic_title">Nouveau Sujet de Forum</h3>
+          <button class="modal-close-btn" data-close-modal aria-label="Fermer">&times;</button>
         </div>
         <div class="modal-body">
           <div class="form-group">
-            <label class="form-label" for="new-topic-title">Titre du Sujet</label>
-            <input type="text" id="new-topic-title" class="form-control" placeholder="Ex: Roadmap et objectifs"/>
+            <label class="form-label" for="new-topic-title" data-i18n="modals.label_topic_title">Titre du Sujet</label>
+            <input type="text" id="new-topic-title" class="form-control" placeholder="Ex: Roadmap et objectifs" data-i18n-attr="placeholder:modals.placeholder_topic_title"/>
           </div>
           <div class="form-group">
-            <label class="form-label" for="new-topic-category">Catégorie</label>
+            <label class="form-label" for="new-topic-category" data-i18n="modals.label_topic_category">Catégorie</label>
             <select id="new-topic-category" class="form-control">
               <option value="Général">Général</option>
               <option value="Architecture">Architecture</option>
-              <option value="Développement">Développement</option>
               <option value="Idées & Brainstorming">Idées & Brainstorming</option>
-              <option value="Support & Questions">Support & Questions</option>
+              <option value="Sécurité & Chiffrement">Sécurité & Chiffrement</option>
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label" for="new-topic-content">Description & Contenu</label>
-            <textarea id="new-topic-content" class="form-control" rows="4" placeholder="Détaillez votre sujet..."></textarea>
+            <label class="form-label" for="new-topic-content" data-i18n="modals.label_topic_content">Description & Contenu</label>
+            <textarea id="new-topic-content" class="form-control" rows="4" placeholder="Détaillez votre sujet..." data-i18n-attr="placeholder:modals.placeholder_topic_content"></textarea>
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" data-close-modal>Annuler</button>
-          <button id="btn-submit-new-topic" class="btn btn-primary">Publier</button>
+          <button class="btn btn-secondary" data-close-modal data-i18n="modals.btn_cancel">Annuler</button>
+          <button id="btn-submit-new-topic" class="btn btn-primary" data-i18n="modals.btn_publish">Publier</button>
         </div>
       </div>
     </div>
 
-    <!-- MODALE 2 : Validation d'Upload / Commit de Fichier -->
-    <div id="modal-file-upload" class="modal-overlay">
+    <!-- MODALE 2 : Téléversement / Nouvelle version de fichier -->
+    <div id="modal-upload-file" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-upload-title">
       <div class="modal-content">
         <div class="modal-header">
-          <h3 id="modal-upload-title" class="modal-title">Partager un Fichier</h3>
-          <button class="modal-close-btn" data-close-modal aria-label="Fermer la boîte de dialogue">&times;</button>
+          <h3 id="modal-upload-title" class="modal-title" data-i18n="modals.upload_title">Partager un Fichier</h3>
+          <button class="modal-close-btn" data-close-modal aria-label="Fermer">&times;</button>
         </div>
         <div class="modal-body">
-          <div style="font-size: 13px; margin-bottom: 8px;">Fichier : <strong id="upload-file-preview-name"></strong></div>
+          <div id="upload-version-badge" class="badge badge-version hidden" style="margin-bottom: 12px;">Nouvelle Version (v2)</div>
           <div class="form-group">
-            <label class="form-label" for="upload-commit-message">Message de Version / Commit</label>
-            <input type="text" id="upload-commit-message" class="form-control" placeholder="Ex: Version initiale ou Ajout de chapitres"/>
+            <label class="form-label" for="input-commit-msg" data-i18n="modals.label_commit_msg">Message de Version / Commit</label>
+            <input type="text" id="input-commit-msg" class="form-control" placeholder="Ex: Version initiale ou Ajout de chapitres" data-i18n-attr="placeholder:modals.placeholder_commit_msg"/>
           </div>
-          <small style="color: var(--text-muted); font-size: 11px;">
+          <p style="font-size: 11px; color: var(--text-muted);" data-i18n="modals.upload_help">
             Le fichier sera découpé en blocs SHA-256 de 512 Ko et répliqué auprès des pairs connectés.
-          </small>
+          </p>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" data-close-modal>Annuler</button>
-          <button id="btn-submit-file-commit" class="btn btn-primary">Diffuser le Fichier</button>
+          <button class="btn btn-secondary" data-close-modal data-i18n="modals.btn_cancel">Annuler</button>
+          <button id="btn-confirm-upload" class="btn btn-primary" data-i18n="modals.btn_broadcast_file">Diffuser le Fichier</button>
         </div>
       </div>
     </div>
 
-    <!-- MODALE 3 : Historique des Versions d'un Fichier -->
-    <div id="modal-file-history" class="modal-overlay">
-      <div class="modal-content" style="max-width: 520px;">
+    <!-- MODALE 3 : Historique des Versions DAG -->
+    <div id="modal-file-history" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-file-history-title">
+      <div class="modal-content">
         <div class="modal-header">
-          <h3 id="modal-history-title" class="modal-title">Historique des Versions</h3>
-          <button class="modal-close-btn" data-close-modal aria-label="Fermer la boîte de dialogue">&times;</button>
+          <h3 id="modal-file-history-title" class="modal-title" data-i18n="modals.history_title">Historique des Versions</h3>
+          <button class="modal-close-btn" data-close-modal aria-label="Fermer">&times;</button>
         </div>
-        <div class="modal-body">
-          <div id="history-timeline-list" class="history-timeline-list"></div>
+        <div class="modal-body" style="padding: 12px;">
+          <div id="file-history-list" class="file-history-timeline"></div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" data-close-modal>Fermer</button>
+          <button class="btn btn-secondary" data-close-modal data-i18n="modals.btn_close">Fermer</button>
         </div>
       </div>
     </div>
 
     <!-- MODALE 4 : Création de Dossier -->
-    <div id="modal-create-folder" class="modal-overlay">
-      <div class="modal-content" style="max-width: 420px;">
+    <div id="modal-create-folder" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-create-folder-title">
+      <div class="modal-content">
         <div class="modal-header">
-          <h3 class="modal-title">📁 Nouveau Dossier</h3>
-          <button class="modal-close-btn" data-close-modal aria-label="Fermer la boîte de dialogue">&times;</button>
+          <h3 id="modal-create-folder-title" class="modal-title" data-i18n="modals.create_folder_title">📁 Nouveau Dossier</h3>
+          <button class="modal-close-btn" data-close-modal aria-label="Fermer">&times;</button>
         </div>
         <div class="modal-body">
           <div class="form-group">
-            <label class="form-label">Emplacement parent</label>
-            <div id="folder-parent-display" style="font-family: var(--font-mono); font-size: 11.5px; color: var(--accent-cyan); background: var(--bg-primary); padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">/</div>
+            <label class="form-label" data-i18n="modals.label_parent_folder">Emplacement parent</label>
+            <div id="folder-parent-display" style="font-family: var(--font-mono); font-size: 12px; color: var(--accent-cyan); padding: 4px 0;">/</div>
           </div>
           <div class="form-group">
-            <label class="form-label">Nom du dossier</label>
-            <input type="text" id="input-folder-name" class="form-control" placeholder="ex: Documents, Projets, Médias..."/>
+            <label class="form-label" for="input-folder-name" data-i18n="modals.label_folder_name">Nom du dossier</label>
+            <input type="text" id="input-folder-name" class="form-control" placeholder="ex: Documents, Projets, Médias..." data-i18n-attr="placeholder:modals.placeholder_folder_name"/>
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" data-close-modal>Annuler</button>
-          <button id="btn-submit-create-folder" class="btn btn-primary">Créer le Dossier</button>
+          <button class="btn btn-secondary" data-close-modal data-i18n="modals.btn_cancel">Annuler</button>
+          <button id="btn-submit-create-folder" class="btn btn-primary" data-i18n="modals.btn_create_folder_submit">Créer le Dossier</button>
         </div>
       </div>
     </div>
 
-    <!-- MODALE 5 : Réglages & Profil -->
-    <div id="modal-settings" class="modal-overlay">
-      <div class="modal-content" style="max-width: 460px;">
+    <!-- MODALE 5 : Réglages & Profil Utilisateur -->
+    <div id="modal-settings" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-settings-title">
+      <div class="modal-content" style="max-width: 520px;">
         <div class="modal-header">
-          <h3 class="modal-title">⚙️ Réglages & Profil</h3>
-          <button class="modal-close-btn" data-close-modal aria-label="Fermer la boîte de dialogue">&times;</button>
+          <h3 id="modal-settings-title" class="modal-title" data-i18n="modals.settings_title">⚙️ Réglages & Profil</h3>
+          <button class="modal-close-btn" data-close-modal aria-label="Fermer">&times;</button>
         </div>
-        <div class="modal-body">
-
-          <div class="settings-identity">
-            <img id="settings-avatar" class="peer-avatar" style="width:48px;height:48px;" alt="Avatar"/>
-            <div style="min-width:0;">
-              <div id="settings-identity-name" style="font-weight:600;font-size:14px;"></div>
-              <div class="settings-fingerprint">Empreinte&nbsp;: <code id="settings-fingerprint">—</code></div>
-            </div>
-          </div>
-
-          <div class="form-group" style="margin-top:12px;">
-            <label class="form-label" for="settings-name-input">Pseudonyme</label>
-            <div style="display:flex; gap:8px;">
-              <input type="text" id="settings-name-input" class="form-control" placeholder="Votre nom"/>
-              <button id="btn-save-name" class="btn btn-secondary btn-sm">Enregistrer</button>
-            </div>
-          </div>
-
+        <div class="modal-body" style="display: flex; flex-direction: column; gap: 14px; max-height: 70vh;">
+          
+          <!-- Internationalisation & Langue -->
           <div class="settings-section">
-            <div class="settings-row">
-              <span>Salon (Topic)</span>
-              <code id="settings-topic" class="truncate" style="max-width:150px;">—</code>
-              <button id="btn-copy-topic" class="btn btn-secondary btn-xs">Copier</button>
+            <h4 style="font-size: 12px; color: var(--accent-cyan); margin-bottom: 8px; font-weight: 600;">🌍 Internationalisation & Affichage</h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+              <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label" for="settings-language-select" style="font-size: 11px;">Langue</label>
+                <select id="settings-language-select" class="form-control" style="font-size: 11.5px; padding: 4px 8px;">
+                  <option value="fr">🇫🇷 Français</option>
+                  <option value="en">🇬🇧 English</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label" for="settings-theme-select" style="font-size: 11px;">Thème Visuel</label>
+                <select id="settings-theme-select" class="form-control" style="font-size: 11.5px; padding: 4px 8px;">
+                  <option value="auto">🌓 Système OS</option>
+                  <option value="dark">🌑 Sombre (WCAG AAA)</option>
+                  <option value="light">☀️ Clair (WCAG AAA)</option>
+                </select>
+              </div>
             </div>
-            <div class="settings-row">
-              <span>Code papier</span>
-              <code id="settings-paper-code" class="truncate" style="max-width:150px;">••••••</code>
-              <button id="btn-copy-paper" class="btn btn-secondary btn-xs">Copier</button>
+
+            <!-- Sélecteur de Densité d'Affichage -->
+            <div style="margin-top: 8px;">
+              <label class="form-label" style="font-size: 11px;">Densité de l'Interface</label>
+              <div class="density-selector-group">
+                <button type="button" class="density-btn" data-density-val="compact">
+                  <span class="density-icon">🗜️</span>
+                  <span class="density-label">Compact</span>
+                </button>
+                <button type="button" class="density-btn active" data-density-val="standard">
+                  <span class="density-icon">⚖️</span>
+                  <span class="density-label">Standard</span>
+                </button>
+                <button type="button" class="density-btn" data-density-val="comfort">
+                  <span class="density-icon">🛋️</span>
+                  <span class="density-label">Confort</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Identité Locale & Clés -->
+          <div class="settings-section">
+            <div class="settings-avatar-row" style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px;">
+              <img id="settings-avatar" src="" alt="Mon Avatar" style="width: 44px; height: 44px; border-radius: 50%; border: 2px solid var(--accent-cyan);"/>
+              <div>
+                <strong id="settings-identity-name" style="font-size: 14px;">Membre P2P</strong>
+                <div style="font-size: 11px; color: var(--text-muted);">Empreinte : <code id="settings-fingerprint">—</code></div>
+              </div>
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label" for="settings-name-input" data-i18n="modals.label_name">Pseudonyme</label>
+              <div style="display: flex; gap: 6px;">
+                <input type="text" id="settings-name-input" class="form-control" placeholder="Votre nom" data-i18n-attr="placeholder:modals.placeholder_name"/>
+                <button id="btn-save-name" class="btn btn-secondary btn-sm" data-i18n="modals.btn_save_name">Enregistrer</button>
+              </div>
+            </div>
+
+            <div class="settings-row" style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-top: 1px solid var(--border-subtle);">
+              <span style="font-size: 11.5px; color: var(--text-secondary);" data-i18n="modals.label_topic">Salon (Topic)</span>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <code id="settings-topic" style="font-size: 11px;">—</code>
+                <button id="btn-copy-topic" class="btn btn-secondary btn-xs" title="Copier l'identifiant du salon" data-i18n="modals.btn_copy">Copier</button>
+              </div>
+            </div>
+
+            <div class="settings-row" style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-top: 1px solid var(--border-subtle);">
+              <span style="font-size: 11.5px; color: var(--text-secondary);" data-i18n="modals.label_paper_code">Code papier</span>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <code id="settings-paper-code" style="font-size: 11px;" data-i18n="modals.masked_paper_code">🔒 Masqué (Zéro-Trace RAM)</code>
+                <button id="btn-copy-paper" class="btn btn-secondary btn-xs" title="Copier le code papier pour le partager" data-i18n="modals.btn_copy">Copier</button>
+              </div>
             </div>
           </div>
 
           <div class="settings-section">
             <label class="settings-toggle">
               <input type="checkbox" id="settings-notifications"/>
-              <span>Notifications bureau pour les nouveaux messages</span>
+              <span data-i18n="modals.label_notifs">Notifications bureau pour les nouveaux messages</span>
             </label>
           </div>
 
           <div class="settings-section">
-            <h4 style="font-size: 12px; color: var(--accent-cyan); margin-bottom: 8px; font-weight: 600;">🎙️ Périphériques Audio & Vidéo</h4>
+            <h4 style="font-size: 12px; color: var(--accent-cyan); margin-bottom: 8px; font-weight: 600;" data-i18n="modals.av_devices_title">🎙️ Périphériques Audio & Vidéo</h4>
             <div style="display: flex; flex-direction: column; gap: 8px;">
               <div class="form-group" style="margin-bottom: 0;">
-                <label class="form-label" for="select-audio-input" style="font-size: 11px;">Microphone</label>
+                <label class="form-label" for="select-audio-input" style="font-size: 11px;" data-i18n="modals.label_mic">Microphone</label>
                 <select id="select-audio-input" class="form-control" style="font-size: 11.5px; padding: 4px 8px;"></select>
               </div>
               <div class="form-group" style="margin-bottom: 0;">
-                <label class="form-label" for="select-audio-output" style="font-size: 11px;">Haut-parleur / Casque</label>
+                <label class="form-label" for="select-audio-output" style="font-size: 11px;" data-i18n="modals.label_speaker">Haut-parleur / Casque</label>
                 <div style="display: flex; gap: 6px;">
                   <select id="select-audio-output" class="form-control" style="font-size: 11.5px; padding: 4px 8px; flex: 1;"></select>
-                  <button id="btn-test-audio-output" class="btn btn-secondary btn-xs" title="Tester la sortie audio">🔊 Test</button>
+                  <button id="btn-test-audio-output" class="btn btn-secondary btn-xs" title="Tester la sortie audio" data-i18n="modals.btn_test_speaker">🔊 Test</button>
                 </div>
               </div>
               <div class="form-group" style="margin-bottom: 0;">
-                <label class="form-label" for="select-video-input" style="font-size: 11px;">Caméra</label>
+                <label class="form-label" for="select-video-input" style="font-size: 11px;" data-i18n="modals.label_cam">Caméra</label>
                 <select id="select-video-input" class="form-control" style="font-size: 11.5px; padding: 4px 8px;"></select>
               </div>
             </div>
@@ -480,7 +538,7 @@
 
           <div class="settings-section">
             <div class="storage-meta" style="display: flex; justify-content: space-between; align-items: center;">
-              <span>💾 Stockage & Persistance</span>
+              <span data-i18n="modals.storage_title">💾 Stockage & Persistance</span>
               <span id="settings-storage-text">—</span>
             </div>
             <div class="progress-bar-container" style="margin: 6px 0;">
@@ -488,15 +546,15 @@
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
               <span id="settings-persistence-badge" class="badge badge-version" style="font-size: 10px;">Vérification...</span>
-              <button id="btn-request-persistence" class="btn btn-secondary btn-xs" style="display: none;">🔒 Activer la Persistance</button>
+              <button id="btn-request-persistence" class="btn btn-secondary btn-xs" style="display: none;" data-i18n="modals.btn_request_persistence">🔒 Activer la Persistance</button>
             </div>
           </div>
 
           <div class="settings-section">
-            <h4 style="font-size: 12px; color: var(--accent-cyan); margin-bottom: 8px; font-weight: 600;">🛠️ Diagnostic & Journalisation</h4>
+            <h4 style="font-size: 12px; color: var(--accent-cyan); margin-bottom: 8px; font-weight: 600;" data-i18n="modals.diag_title">🛠️ Diagnostic & Journalisation</h4>
             <div style="display: flex; flex-direction: column; gap: 8px;">
               <div class="settings-row" style="justify-content: space-between;">
-                <label for="settings-loglevel" style="font-size: 11.5px; color: var(--text-secondary);">Niveau de log</label>
+                <label for="settings-loglevel" style="font-size: 11.5px; color: var(--text-secondary);" data-i18n="modals.label_loglevel">Niveau de log</label>
                 <select id="settings-loglevel" class="form-control" style="width: auto; padding: 3px 8px; font-size: 11px;" aria-label="Sélectionner le niveau de journalisation">
                   <option value="DEBUG">DEBUG (Verbeux)</option>
                   <option value="INFO" selected>INFO (Standard)</option>
@@ -505,10 +563,10 @@
                 </select>
               </div>
               <div class="form-group" style="margin-bottom: 4px;">
-                <label class="form-label" for="settings-debug-filter" style="font-size: 11px;">Filtre sous-systèmes (ex: crdt,drive,presence ou *)</label>
-                <input type="text" id="settings-debug-filter" class="form-control" placeholder="crdt,drive,presence ou *" style="font-size: 11.5px; padding: 4px 8px;" aria-label="Sous-systèmes à déboguer"/>
+                <label class="form-label" for="settings-debug-filter" style="font-size: 11px;" data-i18n="modals.label_debug_filter">Filtre sous-systèmes (ex: crdt,drive,presence ou *)</label>
+                <input type="text" id="settings-debug-filter" class="form-control" placeholder="crdt,drive,presence ou *" style="font-size: 11.5px; padding: 4px 8px;" aria-label="Sous-systèmes à déboguer" data-i18n-attr="placeholder:modals.placeholder_debug_filter"/>
               </div>
-              <button id="btn-export-diagnostic" class="btn btn-secondary btn-sm" style="width: 100%; margin-top: 4px;" aria-label="Exporter le rapport de diagnostic au format JSON">
+              <button id="btn-export-diagnostic" class="btn btn-secondary btn-sm" style="width: 100%; margin-top: 4px;" aria-label="Exporter le rapport de diagnostic au format JSON" data-i18n="modals.btn_export_diag">
                 📥 Exporter le Diagnostic (JSON Anonymisé)
               </button>
             </div>
@@ -516,17 +574,17 @@
 
         </div>
         <div class="modal-footer" style="justify-content: space-between;">
-          <button id="btn-logout" class="btn btn-danger">Se déconnecter</button>
-          <button class="btn btn-secondary" data-close-modal>Fermer</button>
+          <button id="btn-logout" class="btn btn-danger" data-i18n="modals.btn_logout">Se déconnecter</button>
+          <button class="btn btn-secondary" data-close-modal data-i18n="modals.btn_close">Fermer</button>
         </div>
       </div>
     </div>
 
     <!-- MODALE 6 : Aperçu d'image -->
-    <div id="modal-preview" class="modal-overlay">
+    <div id="modal-preview" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="preview-title">
       <div class="modal-content" style="max-width: 92vw; width:auto;">
         <div class="modal-header">
-          <h3 id="preview-title" class="modal-title truncate">Aperçu</h3>
+          <h3 id="preview-title" class="modal-title truncate" data-i18n="modals.preview_title">Aperçu</h3>
           <button class="modal-close-btn" data-close-modal aria-label="Fermer la boîte de dialogue">&times;</button>
         </div>
         <div class="modal-body" style="display:flex; align-items:center; justify-content:center; background: var(--bg-primary);">

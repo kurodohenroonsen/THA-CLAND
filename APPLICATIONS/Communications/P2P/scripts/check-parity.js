@@ -2,6 +2,7 @@
 /**
  * scripts/check-parity.js
  * Vérificateur de parité stricte SHA-256 entre Extension/sidepanel/ et WebApp/
+ * Intègre HTML, CSS, JS, Permissions et Locales i18n.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,11 +17,12 @@ const EXT_SIDE = path.join(BASE_DIR, 'Extension/sidepanel');
 const EXT_ROOT = path.join(BASE_DIR, 'Extension');
 const WEB_ROOT = path.join(BASE_DIR, 'WebApp');
 
-// Définition des paires de vérification de parité
+// Définition exhaustive des cibles de parité
 const PARITY_TARGETS = [
   { src: path.join(EXT_SIDE, 'index.html'), dst: path.join(WEB_ROOT, 'index.html') },
   { src: path.join(EXT_SIDE, 'css'), dst: path.join(WEB_ROOT, 'css'), isDir: true },
   { src: path.join(EXT_SIDE, 'js'), dst: path.join(WEB_ROOT, 'js'), isDir: true },
+  { src: path.join(EXT_SIDE, 'locales'), dst: path.join(WEB_ROOT, 'locales'), isDir: true },
   { src: path.join(EXT_ROOT, 'permissions.html'), dst: path.join(WEB_ROOT, 'permissions.html') },
   { src: path.join(EXT_ROOT, 'permissions.js'), dst: path.join(WEB_ROOT, 'permissions.js') },
 ];
@@ -34,7 +36,7 @@ function getFilesRecursively(dir) {
   let results = [];
   const list = fs.readdirSync(dir);
   for (const file of list) {
-    if (file === '.DS_Store') continue;
+    if (file === '.DS_Store' || file.startsWith('._')) continue;
     const fullPath = path.join(dir, file);
     const stat = fs.statSync(fullPath);
     if (stat.isDirectory()) {

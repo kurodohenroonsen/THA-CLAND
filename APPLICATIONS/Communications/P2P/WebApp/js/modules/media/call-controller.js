@@ -7,6 +7,8 @@ import { Toast } from '../../ui/toast.js';
 import { CONFIG } from '../../core/config.js';
 import { powerManager } from '../../core/power-manager.js';
 import { titleManager } from '../../core/title-manager.js';
+import { a11yAnnouncer } from '../../core/a11y-announcer.js';
+import { EmptyStateService } from '../../ui/empty-state-service.js';
 
 /**
  * Contrôleur des Appels Vocaux & Vidéo Mesh P2P (Standard 2025/2026)
@@ -47,22 +49,31 @@ export class CallController {
     this.initHardwareMonitoring();
   }
 
+  _getElement(selectors) {
+    if (typeof document === 'undefined') return null;
+    for (const sel of selectors) {
+      const el = document.getElementById(sel) || document.querySelector(sel);
+      if (el) return el;
+    }
+    return null;
+  }
+
   initUI() {
     logger.debug('Media', '🎙️ Initialisation du contrôleur d\'appels audio/vidéo...');
-    this.videoGrid = document.getElementById('media-video-grid');
-    this.canvasVisualizer = document.getElementById('audio-visualizer-canvas');
-    this.visualizerBox = document.querySelector('.audio-visualizer-box');
-    this.btnJoinAudio = document.getElementById('btn-join-audio-room');
-    this.btnToggleCam = document.getElementById('btn-toggle-camera');
-    this.btnToggleMic = document.getElementById('btn-toggle-mic');
-    this.btnScreenShare = document.getElementById('btn-share-screen');
-    this.btnLeaveCall = document.getElementById('btn-leave-call');
-    this.btnTogglePiP = document.getElementById('btn-toggle-pip');
-    this.btnToggleSpatial = document.getElementById('btn-toggle-spatial');
-    this.callControlBar = document.getElementById('call-control-bar');
-    this.callStatusText = document.getElementById('call-status-indicator');
-    this.btnPerms = document.getElementById('btn-media-permissions');
-    this.a11yAnnouncer = document.getElementById('call-a11y-announcer');
+    this.videoGrid = this._getElement(['media-video-grid', '#media-video-grid']);
+    this.canvasVisualizer = this._getElement(['audio-visualizer-canvas', '#audio-visualizer-canvas']);
+    this.visualizerBox = this._getElement(['media-visualizer-box', '.media-visualizer-box', '.audio-visualizer-box']);
+    this.btnJoinAudio = this._getElement(['btn-join-call', 'btn-join-audio-room']);
+    this.btnToggleCam = this._getElement(['btn-call-cam', 'btn-toggle-camera']);
+    this.btnToggleMic = this._getElement(['btn-call-mic', 'btn-toggle-mic']);
+    this.btnScreenShare = this._getElement(['btn-call-screen', 'btn-share-screen']);
+    this.btnLeaveCall = this._getElement(['btn-leave-call']);
+    this.btnTogglePiP = this._getElement(['btn-call-pip', 'btn-toggle-pip']);
+    this.btnToggleSpatial = this._getElement(['btn-call-spatial', 'btn-toggle-spatial']);
+    this.callControlBar = this._getElement(['call-controls-bar', '.call-controls-bar', 'call-control-bar']);
+    this.callStatusText = this._getElement(['media-status-text', 'call-status-indicator', '#call-status-indicator']);
+    this.btnPerms = this._getElement(['btn-media-permissions']);
+    this.a11yAnnouncerEl = this._getElement(['call-a11y-announcer', '#call-a11y-announcer']);
 
     if (this.canvasVisualizer) {
       this.visualizer = new AudioVisualizer(this.canvasVisualizer, this.audioProcessor);
@@ -537,21 +548,78 @@ export class CallController {
   }
 
   /**
-   * Routage de la sortie audio vers le périphérique sélectionné (Persona 5.6)
+   * Commutation à chaud transparente du microphone (Zero Renegotiation)
    */
-  async setAudioOutputSink(sinkId) {
-    this.selectedAudioOutputId = sinkId || '';
-    if (!('setSinkId' in HTMLMediaElement.prototype)) {
-      logger.debug('Media', 'setSinkId non supporté sur ce navigateur.');
+  async switchAudioInput(deviceId) {
+    if (!this.isInCall) {
+      this.mediaManager.selectedAudioInputId = deviceId;
       return;
     }
 
-    const audioElements = document.querySelectorAll('audio, video');
-    for (const el of audioElements) {
-      try {
-        await el.setSinkId(this.selectedAudioOutputId);
-      } catch (e) {
-        logger.warn('Media', 'Erreur application setSinkId:', e);
+    try {
+      logger.info('Media', `🎙️ [Hot-Swap] Commutation vers le microphone : ${deviceId}`);
+      Toast.info('Basculement du microphone...');
+
+      const newStream = await this.mediaManager.getAudioStream(deviceId);
+      const processedStream = this.audioProcessor.switchSourceStream ? this.audioProcessor.switchSourceStream(newStream) : null;
+
+      if (!processedStream) {
+        const audioTrack = newStream.getAudioTracks()[0];
+        await this.mesh.replaceAudioTrack(audioTrack);
+      }
+
+      Toast.success('Microphone commuté avec succès !');
+    } catch (err) {
+      logger.error('Media', 'Échec commutation microphone:', err);
+      Toast.error("Impossible de basculer sur le microphone sélectionné.");
+    }
+  }
+
+  /**
+   * Commutation à chaud transparente de la caméra (Zero Renegotiation)
+   */
+  async switchVideoInput(deviceId) {
+    if (!this.isInCall || !this.isVideoActive) {
+      this.mediaManager.selectedVideoInputId = deviceId;
+      return;
+    }
+
+    try {
+      logger.info('Media', `📷 [Hot-Swap] Commutation vers la caméra : ${deviceId}`);
+      Toast.info('Basculement de la caméra...');
+
+      const newStream = await this.mediaManager.getVideoStream(deviceId);
+      const videoTrack = newStream.getVideoTracks()[0];
+
+      if (videoTrack) {
+        await this.mesh.replaceVideoTrack(videoTrack, 'motion');
+        this.updateVideoGrid();
+        Toast.success('Caméra commutée avec succès !');
+      }
+    } catch (err) {
+      logger.error('Media', 'Échec commutation caméra:', err);
+      Toast.error("Impossible de basculer sur la caméra sélectionnée.");
+    }
+  }
+
+  /**
+   * Routage de la sortie audio vers le périphérique sélectionné (Balises DOM + AudioContext)
+   */
+  async setAudioOutputSink(sinkId) {
+    this.selectedAudioOutputId = sinkId || '';
+
+    if (this.spatialAudio && typeof this.spatialAudio.setAudioOutputSink === 'function') {
+      await this.spatialAudio.setAudioOutputSink(this.selectedAudioOutputId);
+    }
+
+    if (typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype) {
+      const audioElements = document.querySelectorAll('audio, video');
+      for (const el of audioElements) {
+        try {
+          await el.setSinkId(this.selectedAudioOutputId);
+        } catch (e) {
+          logger.warn('Media', 'Erreur application setSinkId:', e);
+        }
       }
     }
   }
@@ -755,6 +823,7 @@ export class CallController {
         video.autoplay = true;
         video.playsInline = true;
         video.srcObject = stream;
+        video.muted = this.isSpatialAudioActive;
         if (this.selectedAudioOutputId && 'setSinkId' in video) {
           video.setSinkId(this.selectedAudioOutputId).catch(() => {});
         }
@@ -770,6 +839,7 @@ export class CallController {
           const audio = document.createElement('audio');
           audio.autoplay = true;
           audio.srcObject = stream;
+          audio.muted = this.isSpatialAudioActive;
           if (this.selectedAudioOutputId && 'setSinkId' in audio) {
             audio.setSinkId(this.selectedAudioOutputId).catch(() => {});
           }
@@ -817,13 +887,32 @@ export class CallController {
         </div>`;
     }).join('');
 
-    const header = members.length === 0
-      ? `<div class="empty-state" style="padding:18px 10px;"><div class="empty-icon">🕸️</div><p>Aucun autre membre connecté pour l'instant.</p><small>Les membres du groupe apparaîtront ici.</small></div>`
-      : `<div class="lobby-head">
-           <span>👥 ${members.length} membre(s) dans l'espace</span>
-           ${inCallCount > 0 ? `<span class="lobby-incall-count">🔴 ${inCallCount} en appel</span>` : ''}
-         </div>
-         <div class="lobby-list">${rows}</div>`;
+    if (members.length === 0) {
+      this.videoGrid.innerHTML = '';
+      const emptyState = EmptyStateService.renderMediaLobbyEmptyState(
+        () => this.handleJoinVoiceRoom(),
+        () => {
+          const btn = document.getElementById('btn-test-speaker');
+          if (btn) btn.click();
+          else Toast.info('Test audio déclenché.');
+        },
+        () => {
+          const btn = document.getElementById('btn-media-permissions');
+          if (btn) btn.click();
+        },
+        this.vault
+      );
+      this.videoGrid.appendChild(emptyState);
+      return;
+    }
+
+    const header = `
+      <div class="lobby-head">
+        <span>👥 ${members.length} membre(s) dans l'espace</span>
+        ${inCallCount > 0 ? `<span class="lobby-incall-count">🔴 ${inCallCount} en appel</span>` : ''}
+      </div>
+      <div class="lobby-list">${rows}</div>
+    `;
 
     this.videoGrid.innerHTML = `
       <div class="voice-lobby">

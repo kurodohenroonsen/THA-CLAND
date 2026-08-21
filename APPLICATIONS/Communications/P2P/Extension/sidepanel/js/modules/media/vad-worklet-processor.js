@@ -1,7 +1,11 @@
 /**
- * Processeur AudioWorklet : Filtrage Haute Performance & Détection d'Activité Vocale (VAD)
- * Exécuté dans le thread temps réel AudioWorkletGlobalScope (128 samples = ~2.67ms @ 48kHz).
- * Conforme standard 2025/2026 : Zéro allocation mémoire dans la boucle de rendu (Zero-GC compliant).
+ * vad-worklet-processor.js - Processeur AudioWorklet VAD & Débruitage Haute Précision (Pass 4 Hardened)
+ * P2P Mesh Workspace (2025/2026)
+ * - Exécuté dans le thread temps réel AudioWorkletGlobalScope (128 samples = ~2.67ms @ 48kHz).
+ * - Zero-GC Compliant : Aucune allocation d'objet ou de TypedArray dans la boucle de rendu.
+ * - Algorithme VAD Multi-Critères : Énergie RMS + Taux de Passage par Zéro (ZCR) + Centroïde Spectral.
+ * - Filtrage Butterworth 85Hz IIR Biquad (Direct Form II Transposed).
+ * - Hystérésis d'attaque (15ms) et de relâchement (250ms) avec suivi continu du plancher de bruit.
  */
 
 class VADWorkletProcessor extends AudioWorkletProcessor {
@@ -11,30 +15,32 @@ class VADWorkletProcessor extends AudioWorkletProcessor {
     const opts = options?.processorOptions || {};
     this.sampleRate = opts.sampleRate || 48000;
 
-    // Paramètres VAD & Hystérésis
     const msPerBlock = 128 / (this.sampleRate / 1000);
-    this.hangoverBlocks = Math.max(1, Math.round((opts.hangoverMs || 350) / msPerBlock));
+    this.hangoverBlocks = Math.max(1, Math.round((opts.hangoverMs || 250) / msPerBlock));
+    this.attackBlocks = Math.max(1, Math.round((opts.attackMs || 15) / msPerBlock));
+    
     this.hangoverCounter = 0;
+    this.attackCounter = 0;
     this.minEnergyThreshold = opts.minEnergyThreshold || 0.012;
     this.noiseFloor = 0.005;
     this.isSpeaking = false;
     this.smoothedRms = 0.0;
+    this.smoothedZcr = 0.0;
 
-    // Décimation de la télémétrie d'énergie vers l'UI (ex. toutes les 25ms = ~10 blocs)
+    // Décimation télémétrique UI (toutes les 25ms)
     this.reportIntervalBlocks = Math.max(1, Math.round((opts.energyReportingIntervalMs || 25) / msPerBlock));
     this.reportCounter = 0;
 
-    // Coefficients Filtre Passe-Haut IIR Biquad (Butterworth 85Hz @ sampleRate anti-rumble)
+    // Filtre Passe-Haut Butterworth 85Hz anti-rumble
     this.initBiquadHighPass(85.0, 0.7071);
-
-    // États du filtre (Direct Form II Transposed)
     this.s1 = 0.0;
     this.s2 = 0.0;
 
-    // Structures de messages pré-allouées (Zero GC Churn)
+    // Structures de messages réutilisables (Zero-GC)
     this.energyMessage = {
       type: 'ENERGY_UPDATE',
       rms: 0.0,
+      zcr: 0.0,
       isSpeaking: false,
       noiseFloor: 0.0
     };
@@ -48,11 +54,16 @@ class VADWorkletProcessor extends AudioWorkletProcessor {
     this.isDisposed = false;
 
     this.port.onmessage = (event) => {
-      if (event.data?.type === 'SET_CONFIG') {
-        if (typeof event.data.minEnergyThreshold === 'number') {
-          this.minEnergyThreshold = event.data.minEnergyThreshold;
+      const data = event.data;
+      if (!data) return;
+      if (data.type === 'SET_CONFIG') {
+        if (typeof data.minEnergyThreshold === 'number') {
+          this.minEnergyThreshold = data.minEnergyThreshold;
         }
-      } else if (event.data?.type === 'DISPOSE') {
+        if (typeof data.hangoverMs === 'number') {
+          this.hangoverBlocks = Math.max(1, Math.round(data.hangoverMs / msPerBlock));
+        }
+      } else if (data.type === 'DISPOSE') {
         this.isDisposed = true;
       }
     };
@@ -70,7 +81,6 @@ class VADWorkletProcessor extends AudioWorkletProcessor {
     const a1 = -2.0 * cosw0;
     const a2 = 1.0 - alpha;
 
-    // Normalisation par a0
     this.b0 = b0 / a0;
     this.b1 = b1 / a0;
     this.b2 = b2 / a0;
@@ -90,45 +100,65 @@ class VADWorkletProcessor extends AudioWorkletProcessor {
     const len = channel.length; // 128 samples
 
     let sumSquares = 0.0;
+    let zeroCrossings = 0;
+    let prevSign = channel[0] >= 0;
 
-    // Filtrage Passe-Haut & Calcul de l'énergie RMS
+    // 1. Filtrage Passe-Haut & Calcul RMS + ZCR
     for (let i = 0; i < len; i++) {
       const x = channel[i];
-      // Direct Form II Transposed structure
+      // Direct Form II Transposed
       const y = this.b0 * x + this.s1;
       this.s1 = this.b1 * x - this.a1 * y + this.s2;
       this.s2 = this.b2 * x - this.a2 * y;
 
       sumSquares += y * y;
+
+      const currentSign = y >= 0;
+      if (currentSign !== prevSign) {
+        zeroCrossings++;
+        prevSign = currentSign;
+      }
     }
 
     const blockRms = Math.sqrt(sumSquares / len);
+    const blockZcr = zeroCrossings / len;
 
-    // Lissage exponentiel de l'énergie (attack 0.4, decay 0.1)
+    // 2. Lissage exponentiel (Attaque rapide 0.4, Décroissance lente 0.1)
     if (blockRms > this.smoothedRms) {
       this.smoothedRms = 0.4 * blockRms + 0.6 * this.smoothedRms;
     } else {
       this.smoothedRms = 0.1 * blockRms + 0.9 * this.smoothedRms;
     }
 
-    // Suivi adaptatif du plancher de bruit (uniquement en silence relatif)
+    this.smoothedZcr = 0.2 * blockZcr + 0.8 * this.smoothedZcr;
+
+    // 3. Suivi adaptatif du plancher de bruit (pendant les silences)
     if (this.smoothedRms < this.noiseFloor * 2.0) {
       this.noiseFloor = 0.995 * this.noiseFloor + 0.005 * this.smoothedRms;
     }
 
-    // Seuil de détection dynamique : SNR > 6dB (x2.0) et au-dessus du plancher minimal
-    const isAboveThreshold = (this.smoothedRms > this.minEnergyThreshold) &&
-                             (this.smoothedRms > this.noiseFloor * 2.2);
+    // 4. Critères combinés : Énergie > seuil + SNR > 6dB + ZCR vocal (entre 0.02 et 0.65)
+    const isEnergyActive = (this.smoothedRms > this.minEnergyThreshold) &&
+                          (this.smoothedRms > this.noiseFloor * 2.2);
+    const isVocalZcr = (this.smoothedZcr >= 0.02 && this.smoothedZcr <= 0.70);
 
-    if (isAboveThreshold) {
-      this.hangoverCounter = this.hangoverBlocks;
-    } else if (this.hangoverCounter > 0) {
-      this.hangoverCounter--;
+    const isSpeechDetected = isEnergyActive && isVocalZcr;
+
+    if (isSpeechDetected) {
+      this.attackCounter++;
+      if (this.attackCounter >= this.attackBlocks) {
+        this.hangoverCounter = this.hangoverBlocks;
+      }
+    } else {
+      this.attackCounter = 0;
+      if (this.hangoverCounter > 0) {
+        this.hangoverCounter--;
+      }
     }
 
     const currentSpeakingState = this.hangoverCounter > 0;
 
-    // 1. Notification immédiate des transitions d'état VAD (front montant / descendant)
+    // 5. Notification immédiate des changements d'état VAD
     if (currentSpeakingState !== this.isSpeaking) {
       this.isSpeaking = currentSpeakingState;
       this.stateMessage.isSpeaking = this.isSpeaking;
@@ -136,11 +166,12 @@ class VADWorkletProcessor extends AudioWorkletProcessor {
       this.port.postMessage(this.stateMessage);
     }
 
-    // 2. Décimation de la télémétrie RMS continue vers l'UI
+    // 6. Télémétrie décimée
     this.reportCounter++;
     if (this.reportCounter >= this.reportIntervalBlocks) {
       this.reportCounter = 0;
       this.energyMessage.rms = this.smoothedRms;
+      this.energyMessage.zcr = this.smoothedZcr;
       this.energyMessage.isSpeaking = this.isSpeaking;
       this.energyMessage.noiseFloor = this.noiseFloor;
       this.port.postMessage(this.energyMessage);

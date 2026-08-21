@@ -1,5 +1,6 @@
 /**
  * Composants d'Interface UI (Boutons, Badges, Modales, Cartes, Toasts, Formulaires)
+ * Optimisé avec physique de ressort, contrastes WCAG 2.2 AAA et cibles tactiles 44x44px
  */
 
 /* Boutons */
@@ -8,15 +9,21 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 14px;
-  font-size: 13px;
-  font-weight: 500;
+  padding: var(--density-btn-pad-y) var(--density-btn-pad-x);
+  font-size: var(--density-btn-font-size);
+  min-height: var(--density-btn-min-height);
+  font-weight: 600;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: transform var(--transition-spring-snappy), background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
   white-space: nowrap;
   user-select: none;
+  transform: translateZ(0);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .btn:disabled {
@@ -26,13 +33,18 @@
 
 .btn-primary {
   background: var(--grad-primary);
-  color: #ffffff;
+  color: #041017;
+  font-weight: 700;
   box-shadow: 0 2px 10px rgba(6, 182, 212, 0.3);
 }
 
 .btn-primary:hover:not(:disabled) {
   box-shadow: 0 4px 16px rgba(139, 92, 246, 0.4);
   transform: translateY(-1px);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: scale(0.97) translateY(0);
 }
 
 .btn-secondary {
@@ -47,8 +59,8 @@
 }
 
 .btn-danger {
-  background: rgba(244, 63, 94, 0.2);
-  color: var(--accent-rose);
+  background: rgba(225, 29, 72, 0.25);
+  color: var(--accent-rose-text);
   border-color: rgba(244, 63, 94, 0.4);
 }
 
@@ -58,13 +70,13 @@
 
 .btn-sm {
   padding: 5px 10px;
-  font-size: 11.5px;
+  font-size: var(--font-sm);
   border-radius: var(--radius-sm);
 }
 
 .btn-xs {
   padding: 3px 8px;
-  font-size: 10.5px;
+  font-size: var(--font-xs);
   border-radius: var(--radius-sm);
 }
 
@@ -75,36 +87,37 @@
   gap: 4px;
   padding: 2px 6px;
   border-radius: var(--radius-sm);
-  font-size: 10.5px;
+  font-size: var(--font-xs);
   font-weight: 600;
   letter-spacing: 0.02em;
+  transition: transform var(--transition-fast), background var(--transition-fast);
 }
 
 .badge-version {
   background: rgba(6, 182, 212, 0.15);
-  color: var(--accent-cyan);
+  color: var(--accent-cyan-text);
   border: 1px solid rgba(6, 182, 212, 0.3);
 }
 
 .badge-category {
   background: rgba(139, 92, 246, 0.15);
-  color: var(--accent-violet);
+  color: #c4b5fd;
   border: 1px solid rgba(139, 92, 246, 0.3);
 }
 
 .badge-pinned {
   background: rgba(245, 158, 11, 0.15);
-  color: var(--accent-amber);
+  color: var(--accent-amber-text);
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 .badge-active {
   background: rgba(16, 185, 129, 0.15);
-  color: var(--accent-emerald);
+  color: var(--accent-emerald-text);
   border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
-/* Badges Web of Trust & Gouvernance Décentralisée (Pass 2) */
+/* Badges Web of Trust & Gouvernance */
 .badge-direct-sas {
   background: rgba(16, 185, 129, 0.2);
   color: #34d399;
@@ -119,13 +132,13 @@
 
 .badge-unknown {
   background: rgba(148, 163, 184, 0.15);
-  color: #94a3b8;
+  color: #cbd5e1;
   border: 1px solid rgba(148, 163, 184, 0.3);
 }
 
 .badge-blocked {
   background: rgba(244, 63, 94, 0.2);
-  color: #fb7185;
+  color: #fda4af;
   border: 1px solid rgba(251, 113, 133, 0.4);
 }
 
@@ -137,7 +150,7 @@
 
 .badge-owner {
   background: rgba(168, 85, 247, 0.2);
-  color: #c084fc;
+  color: #e9d5ff;
   border: 1px solid rgba(192, 132, 252, 0.4);
 }
 
@@ -150,7 +163,7 @@
 }
 
 .form-label {
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -159,18 +172,19 @@
 
 .form-control {
   width: 100%;
-  padding: 8px 12px;
+  padding: var(--density-input-pad-y) var(--density-input-pad-x);
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--density-input-font-size);
   font-family: inherit;
-  transition: all var(--transition-fast);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
 }
 
 .form-control:focus {
-  outline: none;
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 1px;
   border-color: var(--accent-cyan);
   box-shadow: 0 0 10px rgba(6, 182, 212, 0.25);
 }
@@ -180,7 +194,10 @@ textarea.form-control {
   min-height: 70px;
 }
 
-/* Modales */
+/* ==========================================================================
+   MODALES — ACCESSIBILITÉ & TRANSITIONS SPRING
+   ========================================================================== */
+
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -215,12 +232,13 @@ textarea.form-control {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateY(16px);
-  transition: transform var(--transition-normal);
+  transform: translate3d(0, 14px, 0) scale(0.96);
+  transition: transform var(--transition-spring), opacity var(--transition-normal);
+  will-change: transform, opacity;
 }
 
 .modal-overlay.modal-active .modal-content {
-  transform: translateY(0);
+  transform: translate3d(0, 0, 0) scale(1);
 }
 
 .modal-header {
@@ -232,20 +250,30 @@ textarea.form-control {
 }
 
 .modal-title {
-  font-size: 15px;
+  font-size: var(--font-lg);
   font-weight: 600;
+  line-height: var(--lh-snug);
 }
 
 .modal-close-btn {
   background: transparent;
   border: none;
   color: var(--text-muted);
-  font-size: 18px;
+  font-size: var(--font-xl);
+  line-height: 1;
   cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
 }
 
 .modal-close-btn:hover {
   color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.modal-close-btn:active {
+  transform: scale(0.92);
 }
 
 .modal-body {
@@ -286,8 +314,10 @@ textarea.form-control {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   color: var(--text-primary);
-  font-size: 12.5px;
+  font-size: var(--font-sm);
   pointer-events: auto;
+  animation: slideIn var(--transition-spring);
+  transition: transform var(--transition-fast), opacity var(--transition-fast);
 }
 
 .toast-success {
@@ -323,24 +353,7 @@ textarea.form-control {
   border-width: 1.5px;
 }
 
-/* États vides (Empty States) */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 36px 16px;
-  text-align: center;
-  color: var(--text-muted);
-  gap: 8px;
-}
-
-.empty-icon {
-  font-size: 32px;
-  margin-bottom: 4px;
-}
-
-/* Composant Carte Dépolie Standardisé (.glass-card) */
+/* Cartes Dépolies */
 .glass-card {
   background: var(--bg-glass-card);
   backdrop-filter: blur(14px);
@@ -348,17 +361,58 @@ textarea.form-control {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
-  padding: 18px;
+  padding: var(--density-card-pad);
   contain: paint;
   isolation: isolate;
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
 .glass-card:hover {
   border-color: var(--border-glow);
 }
 
-/* Accessibilité & Performance GPU : Réduction de la transparence */
+/* ==========================================================================
+   HITBOX TACTILES UNIVERSELLES 44x44px (WCAG 2.2 SC 2.5.5 AAA)
+   ========================================================================== */
+
+.icon-btn,
+.btn-xs,
+.btn-sm,
+.modal-close-btn,
+.btn-file-delete,
+.btn-folder-delete,
+.crumb-item,
+.channel-item,
+.chat-emoji-bar button,
+.input-reveal-btn,
+.staged-remove {
+  position: relative;
+}
+
+.icon-btn::after,
+.btn-xs::after,
+.btn-sm::after,
+.modal-close-btn::after,
+.btn-file-delete::after,
+.btn-folder-delete::after,
+.crumb-item::after,
+.channel-item::after,
+.chat-emoji-bar button::after,
+.input-reveal-btn::after,
+.staged-remove::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 44px;
+  min-height: 44px;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+}
+
+/* Accessibilité : Réduction de transparence */
 @media (prefers-reduced-transparency: reduce) {
   .glass-card,
   .app-header,

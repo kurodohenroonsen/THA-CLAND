@@ -1,0 +1,190 @@
+/**
+ * P2P Mesh Workspace - Styles des États Vides & Onboarding Progressif (2025/2026)
+ * Animations GPU-accelerated, Glassmorphism, Responsive & Accessibilité WCAG 2.2 AAA
+ */
+
+.p2p-empty-state-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: clamp(24px, 5vh, 48px) 16px;
+  margin: auto;
+  max-width: 540px;
+  animation: emptyStateFadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  color: var(--text-secondary);
+}
+
+@keyframes emptyStateFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Conteneur d'illustration SVG vectorielle */
+.empty-svg-art {
+  width: 130px;
+  height: 130px;
+  margin-bottom: var(--space-4);
+  filter: drop-shadow(0 8px 24px rgba(6, 182, 212, 0.18));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.empty-svg-art svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* Animations SVG douces */
+.p2p-anim-pulse {
+  animation: svgNodePulse 3s ease-in-out infinite;
+}
+
+.p2p-anim-float {
+  animation: svgFloat 4s ease-in-out infinite alternate;
+}
+
+.p2p-anim-orbit {
+  transform-origin: center;
+  animation: svgOrbit 14s linear infinite;
+}
+
+@keyframes svgNodePulse {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.08); opacity: 1; filter: drop-shadow(0 0 8px var(--accent-cyan)); }
+}
+
+@keyframes svgFloat {
+  0% { transform: translateY(0px); }
+  100% { transform: translateY(-6px); }
+}
+
+@keyframes svgOrbit {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Typographie & Titres */
+.empty-state-heading {
+  font-size: clamp(15px, 2.5cqi, 18px);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: var(--space-2);
+  letter-spacing: -0.01em;
+}
+
+.empty-state-description {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  margin-bottom: var(--space-4);
+  max-width: 440px;
+}
+
+/* Badge explicatif zéro-serveur */
+.p2p-zero-server-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(6, 182, 212, 0.08);
+  border: 1px solid rgba(6, 182, 212, 0.25);
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--accent-cyan);
+  margin-bottom: var(--space-3);
+}
+
+/* Barre d'Actions & Suggestions Rapides */
+.empty-state-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.empty-state-primary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-glow);
+  cursor: pointer;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.empty-state-primary-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 24px rgba(6, 182, 212, 0.45);
+}
+
+.empty-state-chips-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.empty-state-chip {
+  background: var(--bg-glass-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  padding: 6px 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all var(--transition-fast);
+}
+
+.empty-state-chip:hover {
+  background: var(--bg-glass-hover);
+  border-color: var(--accent-cyan);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+
+.empty-state-chip:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: 2px;
+}
+
+/* Respect de l'accessibilité pour les mouvements réduits */
+@media (prefers-reduced-motion: reduce) {
+  .p2p-empty-state-wrapper,
+  .p2p-anim-pulse,
+  .p2p-anim-float,
+  .p2p-anim-orbit {
+    animation: none !important;
+    transform: none !important;
+  }
+}
+
+/* Thème High Contrast WHCM */
+@media (forced-colors: active) {
+  .p2p-zero-server-badge,
+  .empty-state-chip,
+  .empty-state-primary-btn {
+    border: 1px solid ButtonBorder !important;
+  }
+}

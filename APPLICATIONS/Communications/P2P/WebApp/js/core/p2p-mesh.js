@@ -1,42 +1,111 @@
 import { logger } from './logger.js';
-/**
- * Moteur Réseau P2P Mesh & Coordinateur de Swarm Décentralisé (2025/2026)
- * Signalement multi-canaux (WebTorrent + Nostr), négociation WebRTC avec transceivers,
- * contre-pression événementielle sans polling, framing MTU 16 Ko et télémétrie eMOS.
- */
-
 import { CONFIG } from './config.js';
 import { BoundedSet, TTLMap, GenerationalSlidingCache, GossipEnvelope } from './bounded-cache.js';
 import { CryptoVault } from './crypto-vault.js';
 import { WebRTCTelemetryEngine } from './webrtc-telemetry.js';
+import { IceCandidateManager } from './ice-manager.js';
+import { DataChannelFlowController } from './datachannel-flow-controller.js';
+import { TopologyGovernor } from './topology-governor.js';
+import { BinaryFrameRouter, FRAME_TYPES, FRAME_FLAGS } from './binary-frame-router.js';
+import { SDPSecureSignaling } from './secure-signaling-e2ee.js';
+import { SDPOptimizer } from '../modules/media/sdp-optimizer.js';
+import { MediaQualityManager } from '../modules/media/media-quality-manager.js';
+
+/**
+ * Moteur Réseau P2P Mesh & Coordinateur de Swarm Décentralisé (Pass 4 Hardened 2026)
+ * - W3C Perfect Negotiation (Rôle déterministe 0-RTT, Rollback W3C, Anti-Glare FSM)
+ * - Ingress Rate Limiting & Anti-Fragment Bomb
+ * - Trickle ICE & Candidate Queuing (IceCandidateManager)
+ * - Contrôle de Flux BDP & Contre-Pression Événementielle (DataChannelFlowController)
+ * - Gouvernance de Topologie & Churn Management (TopologyGovernor)
+ * - Framing Binaire Zero-Copy (BinaryFrameRouter)
+ * - Signalisation E2EE & SDP Identity Binding (SDPSecureSignaling)
+ * - Reconnexion Full Jitter & Résilience Multi-Voies
+ */
+
+class InboundRateLimiter {
+  constructor({ maxTokens = 60, refillRatePerSec = 30, maxBytesPerSec = 512 * 1024 } = {}) {
+    this.maxTokens = maxTokens;
+    this.refillRate = refillRatePerSec;
+    this.maxBytesPerSec = maxBytesPerSec;
+    this.tokens = maxTokens;
+    this.byteBucket = maxBytesPerSec;
+    this.lastRefill = Date.now();
+  }
+
+  _refill() {
+    const now = Date.now();
+    const elapsedSec = (now - this.lastRefill) / 1000;
+    this.tokens = Math.min(this.maxTokens, this.tokens + elapsedSec * this.refillRate);
+    this.byteBucket = Math.min(this.maxBytesPerSec, this.byteBucket + elapsedSec * this.maxBytesPerSec);
+    this.lastRefill = now;
+  }
+
+  allowMessage(byteSize = 100) {
+    this._refill();
+    if (this.tokens < 1 || this.byteBucket < byteSize) {
+      return false;
+    }
+    this.tokens -= 1;
+    this.byteBucket -= byteSize;
+    return true;
+  }
+}
+
+export class PeerNegotiationState {
+  constructor(peerId, localPeerIdHex, remotePubkeyHex = '') {
+    this.peerId = peerId;
+    this.localPeerIdHex = localPeerIdHex;
+    this.remotePubkeyHex = remotePubkeyHex;
+
+    const comparisonKey = remotePubkeyHex || peerId.replace(/^peer_/, '');
+    this.isPolite = localPeerIdHex.localeCompare(comparisonKey) < 0;
+
+    this.makingOffer = false;
+    this.ignoreOffer = false;
+    this.isSettingRemoteAnswerPending = false;
+    this.queuedNegotiation = false;
+
+    this.metrics = {
+      glareCollisions: 0,
+      rollbacksExecuted: 0,
+      offersCreated: 0,
+      answersCreated: 0,
+      lastNegotiationDurationMs: 0
+    };
+  }
+}
 
 export class P2PMeshNetwork {
   constructor(cryptoVault) {
     this.vault = cryptoVault;
     this.signalingPeerId = CryptoVault.bufferToHex(crypto.getRandomValues(new Uint8Array(20)));
-    this.peers = new Map(); // peerId -> { id, name, connection, controlChannel, dataChannel, connectedAt, lastSeen, latencyMs, incomingFragments: Map }
-    this.trackers = new Map(); // trackerUrl -> WebSocket
-    this._trackerBackoff = new Map(); // trackerUrl -> delayMs
-    this.nostrRelays = new Map(); // relayUrl -> WebSocket
+    this.peers = new Map();
+    this.trackers = new Map();
+    this._trackerBackoff = new Map();
+    this._trackerAttempts = new Map();
+    this.nostrRelays = new Map();
     this.eventListeners = new Map();
 
-    // Moteur de Télémétrie getStats() 2026
+    // Moteurs spécialisés Pass 4
     this.telemetry = new WebRTCTelemetryEngine(this);
+    this.flowController = new DataChannelFlowController();
+    this.binaryRouter = new BinaryFrameRouter({ vault: this.vault });
+    this.topology = new TopologyGovernor(this, null);
+    this.qualityManager = new MediaQualityManager(this);
 
-    // Timers de grâce de déconnexion et verrous d'ICE Restart
-    this.peerGraceTimers = new Map(); // peerId -> timer
-    this.iceRestartInProgress = new Set(); // peerId
+    this.peerGraceTimers = new Map();
+    this.iceRestartInProgress = new Set();
+    this.iceManagers = new Map();
 
-    // Offres SDP en attente de réponse : bornées + TTL
     this.activeOffers = new TTLMap({
       maxSize: 256,
-      ttlMs: CONFIG.TIMINGS.OFFER_TTL || 45000,
+      ttlMs: CONFIG.TIMINGS?.OFFER_TTL || 45000,
       onEvict: (offerId, entry) => {
         try { entry?.pc?.close(); } catch (e) { logger.debug('P2P Mesh', 'Erreur fermeture RTCPeerConnection expirée:', e); }
       }
     });
 
-    // Anti-doublon des offres et messages de diffusion Gossip
     this.processedOfferIds = new BoundedSet(4000);
     this.processedGossipIds = new GenerationalSlidingCache({ generationSize: 20000, rotateIntervalMs: 90000 });
 
@@ -44,8 +113,6 @@ export class P2PMeshNetwork {
     this.maintenanceInterval = null;
     this.localMediaStream = null;
   }
-
-  // --- Gestionnaire d'Événements ---
 
   on(event, callback) {
     if (!this.eventListeners.has(event)) {
@@ -66,9 +133,6 @@ export class P2PMeshNetwork {
     return !!(this.localMediaStream && this.localMediaStream.active);
   }
 
-  /**
-   * Démarre la connexion au réseau P2P pour le Topic dérivé du code papier
-   */
   async start() {
     if (!this.vault.isInitialized) {
       throw new Error('Le coffre cryptographique doit être initialisé');
@@ -77,41 +141,36 @@ export class P2PMeshNetwork {
     logger.info('P2P Mesh', `🚀 Démarrage du réseau Mesh pour Topic: ${this.vault.topicHex.substring(0, 10)}... (Pair: ${this.vault.peerIdHex.substring(0, 12)}...)`);
     this.emit('status-change', { status: 'connecting', message: 'Connexion aux relais de découverte...' });
 
-    // Démarrage de la télémétrie périodique (2s)
     this.telemetry.start(2000);
+    this.topology.start();
+    this.qualityManager.start(2000);
 
-    // 1. Connexion aux trackers WebTorrent WSS
     for (const trackerUrl of CONFIG.TRACKERS) {
-      logger.info('P2P Mesh', `🌐 Connexion au tracker WebTorrent: ${trackerUrl}`);
+      logger.info('P2P Mesh', `🌐 Connexion tracker: ${trackerUrl}`);
       this.connectToTracker(trackerUrl);
     }
 
-    // 2. Connexion aux relais Nostr (Signalement décentralisé complémentaire)
     for (const nostrUrl of (CONFIG.NOSTR_RELAYS || [])) {
-      logger.info('P2P Mesh', `⚡ Connexion au relais Nostr: ${nostrUrl}`);
+      logger.info('P2P Mesh', `⚡ Connexion relais Nostr: ${nostrUrl}`);
       this.connectToNostrRelay(nostrUrl);
     }
 
-    // Boucle d'annonce périodique (30s)
-    const announcePeriod = CONFIG.TIMINGS.DEFAULT_ANNOUNCE_INTERVAL || 30000;
+    const announcePeriod = CONFIG.TIMINGS?.DEFAULT_ANNOUNCE_INTERVAL || 25000;
     this.announceInterval = setInterval(() => {
-      logger.debug('P2P Mesh', '🔄 Déclenchement de l\'annonce périodique sur les trackers...');
       this.announceAllTrackers();
     }, announcePeriod);
+    if (this.announceInterval?.unref) this.announceInterval.unref();
 
-    // Boucle de maintenance : purge des offres SDP expirées
     this.maintenanceInterval = setInterval(() => {
       this.activeOffers.sweep();
     }, 10000);
+    if (this.maintenanceInterval?.unref) this.maintenanceInterval.unref();
 
     return this;
   }
 
-  /**
-   * Arrêt gracieux avec notification 'stopped' vers tous les trackers
-   */
   async stop() {
-    logger.info('P2P Mesh', '🛑 Arrêt gracieux du maillage P2P et libération des ressources...');
+    logger.info('P2P Mesh', '🛑 Arrêt gracieux du maillage P2P...');
     if (this.announceInterval) {
       clearInterval(this.announceInterval);
       this.announceInterval = null;
@@ -122,8 +181,9 @@ export class P2PMeshNetwork {
     }
 
     this.telemetry.stop();
+    this.topology.stop();
+    this.qualityManager.stop();
 
-    // Envoi de l'annonce de départ "stopped" vers tous les trackers ouverts
     const departurePromises = [];
     this.trackers.forEach((ws, url) => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -150,23 +210,25 @@ export class P2PMeshNetwork {
     this.peers.clear();
     this.peerGraceTimers.clear();
     this.iceRestartInProgress.clear();
+    this.iceManagers.clear();
 
     this.emit('status-change', { status: 'disconnected', message: 'Déconnecté du réseau P2P' });
   }
 
-  // --- Rassemblement ICE WebRTC Adaptatif & Court-Circuit ---
+  // --- Rassemblement ICE WebRTC Adaptatif & Court-Circuit LAN ---
 
-  async waitForIceGathering(pc, maxTimeoutMs = 2000, earlyExitMs = 300) {
+  async waitForIceGathering(pc, maxTimeoutMs = 1800, fastLanTimeoutMs = 120) {
     if (pc.iceGatheringState === 'complete') {
       return pc.localDescription;
     }
+
     return new Promise((resolve) => {
       let timer = null;
-      let earlyTimer = null;
+      let fastTimer = null;
 
       const cleanup = () => {
         if (timer) clearTimeout(timer);
-        if (earlyTimer) clearTimeout(earlyTimer);
+        if (fastTimer) clearTimeout(fastTimer);
         pc.removeEventListener('icegatheringstatechange', checkState);
         pc.removeEventListener('icecandidate', onCandidate);
       };
@@ -178,14 +240,24 @@ export class P2PMeshNetwork {
         }
       };
 
-      // Court-circuit dès la découverte d'un candidat STUN (srflx) ou TURN (relay)
       const onCandidate = (event) => {
-        if (event.candidate && (event.candidate.type === 'srflx' || event.candidate.type === 'relay')) {
-          if (!earlyTimer) {
-            earlyTimer = setTimeout(() => {
+        if (!event.candidate) return;
+
+        const cType = event.candidate.type;
+        if (cType === 'host') {
+          if (!fastTimer && !CONFIG.PRIVACY?.FORCE_RELAY_ONLY) {
+            fastTimer = setTimeout(() => {
+              logger.debug('P2P Mesh', '⚡ Fast-Path LAN déclenché');
               cleanup();
               resolve(pc.localDescription);
-            }, earlyExitMs);
+            }, fastLanTimeoutMs);
+          }
+        } else if (cType === 'srflx' || cType === 'relay') {
+          if (!fastTimer) {
+            fastTimer = setTimeout(() => {
+              cleanup();
+              resolve(pc.localDescription);
+            }, 250);
           }
         }
       };
@@ -207,18 +279,18 @@ export class P2PMeshNetwork {
       const ws = new WebSocket(trackerUrl);
       this.trackers.set(trackerUrl, ws);
 
-      // Handshake timeout de 6s pour éviter les sockets zombies
       const connectTimer = setTimeout(() => {
         if (ws.readyState === WebSocket.CONNECTING) {
-          logger.warn('P2P Mesh', `⏱️ Timeout handshake tracker (${trackerUrl}), abandon`);
+          logger.warn('P2P Mesh', `⏱️ Timeout handshake tracker (${trackerUrl})`);
           try { ws.close(); } catch (e) {}
         }
-      }, CONFIG.TIMINGS.TRACKER_CONNECT_TIMEOUT || 6000);
+      }, CONFIG.TIMINGS?.TRACKER_CONNECT_TIMEOUT || 5000);
 
       ws.onopen = () => {
         clearTimeout(connectTimer);
         logger.info('P2P Mesh', `✅ Connecté au tracker: ${trackerUrl}`);
-        this._trackerBackoff.set(trackerUrl, CONFIG.TIMINGS.RECONNECT_DELAY || 5000);
+        this._trackerBackoff.set(trackerUrl, CONFIG.TIMINGS?.RECONNECT_DELAY || 1500);
+        this._trackerAttempts.delete(trackerUrl);
         this.announceToTracker(ws, trackerUrl, 'started');
       };
 
@@ -232,32 +304,40 @@ export class P2PMeshNetwork {
       };
 
       ws.onerror = (err) => {
-        logger.warn('P2P Mesh', `Erreur sur le tracker ${trackerUrl}:`, err);
+        logger.warn('P2P Mesh', `Erreur tracker ${trackerUrl}:`, err);
       };
 
       ws.onclose = () => {
         clearTimeout(connectTimer);
-        logger.info('P2P Mesh', `🔌 Connexion fermée avec tracker ${trackerUrl}`);
         this.trackers.delete(trackerUrl);
-
-        if (!this.announceInterval) return; // Arrêt volontaire
-
-        // Reconnexion avec Backoff Exponentiel + Full Jitter
-        const currentDelay = this._trackerBackoff.get(trackerUrl) || (CONFIG.TIMINGS.RECONNECT_DELAY || 5000);
-        const nextDelay = Math.min(currentDelay * 1.5, CONFIG.TIMINGS.MAX_RECONNECT_DELAY || 60000);
-        const jitter = nextDelay * (0.8 + Math.random() * 0.4);
-        this._trackerBackoff.set(trackerUrl, nextDelay);
-
-        setTimeout(() => {
-          if (this.announceInterval && navigator.onLine) {
-            logger.info('P2P Mesh', `🔄 Reconnexion planifiée tracker (${Math.round(jitter / 1000)}s): ${trackerUrl}`);
-            this.connectToTracker(trackerUrl);
-          }
-        }, jitter);
+        if (this.announceInterval) {
+          this._scheduleTrackerReconnect(trackerUrl);
+        }
       };
     } catch (e) {
-      logger.warn('P2P Mesh', `❌ Exception connexion tracker ${trackerUrl}:`, e);
+      logger.warn('P2P Mesh', `Exception connexion tracker ${trackerUrl}:`, e);
     }
+  }
+
+  _scheduleTrackerReconnect(trackerUrl) {
+    if (!this.announceInterval || !navigator.onLine) return;
+
+    const baseDelay = CONFIG.NOSTR?.BACKOFF?.INITIAL_DELAY_MS || 1000;
+    const maxDelay = CONFIG.NOSTR?.BACKOFF?.MAX_DELAY_MS || 30000;
+    
+    const attempts = (this._trackerAttempts?.get(trackerUrl) || 0) + 1;
+    this._trackerAttempts.set(trackerUrl, attempts);
+
+    const exponentialCap = Math.min(maxDelay, baseDelay * Math.pow(2, Math.min(attempts, 6)));
+    const jitteredDelay = Math.floor(Math.random() * exponentialCap);
+
+    logger.info('P2P Mesh', `🔄 Reconnexion Tracker [Tentative ${attempts}, ${jitteredDelay}ms] : ${trackerUrl}`);
+
+    setTimeout(() => {
+      if (this.announceInterval && navigator.onLine) {
+        this.connectToTracker(trackerUrl);
+      }
+    }, jitteredDelay);
   }
 
   async announceAllTrackers() {
@@ -268,9 +348,6 @@ export class P2PMeshNetwork {
     });
   }
 
-  /**
-   * Envoie une annonce au tracker avec offres WebRTC parallèles
-   */
   async announceToTracker(ws, trackerUrl, eventType = 'update') {
     if (ws.readyState !== WebSocket.OPEN) return;
 
@@ -291,20 +368,27 @@ export class P2PMeshNetwork {
           priority: 'high'
         });
         const dataChannel = pc.createDataChannel('p2p-data', {
-          ordered: false,
-          priority: 'very-low',
-          maxRetransmits: 0
+          ordered: true,
+          priority: 'low'
         });
 
         const rawOffer = await pc.createOffer();
         await pc.setLocalDescription(rawOffer);
 
-        const completeOffer = await this.waitForIceGathering(pc, 2000, 300);
+        const completeOffer = await this.waitForIceGathering(pc, 1800, 120);
         const sanitizedOffer = this._sanitizeAndPadSDP(completeOffer.sdp);
+
+        // Binding cryptographique signé anti-MitM
+        const binding = await SDPSecureSignaling.createSignedBinding(
+          this.vault,
+          sanitizedOffer.sdp,
+          completeOffer.type
+        );
 
         const encryptedOffer = await this.vault.encrypt({
           type: completeOffer.type,
           sdp: sanitizedOffer.sdp,
+          binding,
           _pad: sanitizedOffer._pad
         }, true);
 
@@ -327,25 +411,18 @@ export class P2PMeshNetwork {
       offers = await Promise.all(offerTasks);
     }
 
-    const infoHashHex = this.vault.topicHex.substring(0, 40);
-    const peerIdHex = this.signalingPeerId;
-
     const announceMsg = {
       action: 'announce',
-      info_hash: infoHashHex,
-      peer_id: peerIdHex,
+      info_hash: this.vault.topicHex.substring(0, 40),
+      peer_id: this.signalingPeerId,
       numwant: eventType === 'stopped' ? 0 : 10,
       uploaded: 0,
       downloaded: 0,
       left: 0
     };
 
-    if (eventType && eventType !== 'update') {
-      announceMsg.event = eventType;
-    }
-    if (offers.length > 0) {
-      announceMsg.offers = offers;
-    }
+    if (eventType && eventType !== 'update') announceMsg.event = eventType;
+    if (offers.length > 0) announceMsg.offers = offers;
 
     try {
       ws.send(JSON.stringify(announceMsg));
@@ -355,9 +432,6 @@ export class P2PMeshNetwork {
     }
   }
 
-  /**
-   * Nettoie les candidats du SDP tout en préservant le LAN (.local mDNS)
-   */
   _sanitizeAndPadSDP(sdp) {
     let cleaned = sdp || '';
     if (CONFIG.PRIVACY?.STRIP_HOST_CANDIDATES) {
@@ -370,6 +444,7 @@ export class P2PMeshNetwork {
         })
         .join('\r\n');
     }
+    cleaned = SDPOptimizer.optimizeSDP(cleaned);
     const blockSize = CONFIG.PRIVACY?.SDP_PADDING_BLOCK_SIZE || 2048;
     const padLength = (blockSize - (cleaned.length % blockSize)) % blockSize;
     return {
@@ -378,26 +453,21 @@ export class P2PMeshNetwork {
     };
   }
 
-  /**
-   * Traite les messages entrants des trackers
-   */
   async handleTrackerMessage(data, ws) {
     if (!data) return;
 
     if (data['failure reason']) {
-      logger.warn('P2P Mesh', `⚠️ Erreur signalée par le tracker: ${data['failure reason']}`);
+      logger.warn('P2P Mesh', `⚠️ Erreur tracker: ${data['failure reason']}`);
       return;
     }
 
     if (data.action === 'announce') {
       const senderPeerIdHex = data.peer_id ? String(data.peer_id) : '';
 
-      // Ignore nos propres annonces
       if (senderPeerIdHex === this.signalingPeerId || senderPeerIdHex === this.vault.peerIdHex) {
         return;
       }
 
-      // Contrôle de routage : ignore les messages explicitement destinés à un tiers
       if (data.to_peer_id && String(data.to_peer_id) !== this.signalingPeerId) {
         return;
       }
@@ -407,20 +477,26 @@ export class P2PMeshNetwork {
         return;
       }
 
-      // 1. Réception d'une offre WebRTC
+      // Contrôle d'admission via TopologyGovernor
       if (data.offer && data.offer_id) {
         if (!this.processedOfferIds.addIfNew(data.offer_id)) return;
+
+        const decision = this.topology ? this.topology.evaluateIncomingOffer(remotePeerId) : { accept: true };
+        if (!decision.accept) {
+          logger.warn('P2P Mesh', `✋ Offre rejetée de ${remotePeerId} (Raison: ${decision.reason})`);
+          return;
+        }
+
+        if (decision.evictPeerId) {
+          await this.topology.evictPeerGracefully(decision.evictPeerId, 'slot_preempted');
+        }
 
         logger.info('P2P Mesh', `🤝 Offre WebRTC entrante de ${remotePeerId} [OfferID: ${data.offer_id}] !`);
 
         try {
           let cipherPayload = data.offer;
           if (data.offer && typeof data.offer === 'object' && data.offer.sdp) {
-            try {
-              cipherPayload = JSON.parse(data.offer.sdp);
-            } catch (e) {
-              cipherPayload = data.offer.sdp;
-            }
+            try { cipherPayload = JSON.parse(data.offer.sdp); } catch (e) { cipherPayload = data.offer.sdp; }
           }
 
           const decryptedOffer = await this.vault.decrypt(cipherPayload, true);
@@ -428,22 +504,44 @@ export class P2PMeshNetwork {
             throw new Error('SDP manquant dans l\'offre déchiffrée');
           }
 
-          const pc = this.createPeerConnection(remotePeerId);
+          // Validation du Binding E2EE
+          if (decryptedOffer.binding) {
+            const verifyResult = await SDPSecureSignaling.verifySignedBinding(
+              decryptedOffer.binding,
+              decryptedOffer.sdp
+            );
+            if (!verifyResult.valid) {
+              logger.error('P2P Mesh', `❌ Rejet Offre SDP : Échec Binding Anti-MitM (${verifyResult.reason})`);
+              return;
+            }
+          }
 
+          const pc = this.createPeerConnection(remotePeerId);
           await pc.setRemoteDescription(new RTCSessionDescription({
             type: decryptedOffer.type || 'offer',
             sdp: decryptedOffer.sdp
           }));
 
+          const iceMgr = this.iceManagers.get(remotePeerId);
+          if (iceMgr) await iceMgr.onRemoteDescriptionSet();
+
           const rawAnswer = await pc.createAnswer();
           await pc.setLocalDescription(rawAnswer);
 
-          const completeAnswer = await this.waitForIceGathering(pc, 2000, 300);
+          const completeAnswer = await this.waitForIceGathering(pc, 1800, 120);
           const sanitizedAnswer = this._sanitizeAndPadSDP(completeAnswer.sdp);
+
+          const bindingAnswer = await SDPSecureSignaling.createSignedBinding(
+            this.vault,
+            sanitizedAnswer.sdp,
+            completeAnswer.type,
+            remotePeerId
+          );
 
           const encryptedAnswer = await this.vault.encrypt({
             type: completeAnswer.type,
             sdp: sanitizedAnswer.sdp,
+            binding: bindingAnswer,
             _pad: sanitizedAnswer._pad
           }, true);
 
@@ -459,34 +557,42 @@ export class P2PMeshNetwork {
             offer_id: data.offer_id
           };
 
-          logger.info('P2P Mesh', `📤 Envoi de la réponse SDP chiffrée vers ${remotePeerId}...`);
           ws.send(JSON.stringify(answerMsg));
         } catch (err) {
           logger.warn('P2P Mesh', 'Rejet offre reçue:', err.message);
         }
       }
 
-      // 2. Réception d'une réponse à une offre existante
       if (data.answer && data.offer_id) {
-        logger.info('P2P Mesh', `📥 Réponse SDP reçue pour l'offre ${data.offer_id}...`);
         const pending = this.activeOffers.get(data.offer_id);
         if (pending && pending.pc) {
           try {
             let cipherAnswerPayload = data.answer;
             if (data.answer && typeof data.answer === 'object' && data.answer.sdp) {
-              try {
-                cipherAnswerPayload = JSON.parse(data.answer.sdp);
-              } catch (e) {
-                cipherAnswerPayload = data.answer.sdp;
-              }
+              try { cipherAnswerPayload = JSON.parse(data.answer.sdp); } catch (e) { cipherAnswerPayload = data.answer.sdp; }
             }
 
             const decryptedAnswer = await this.vault.decrypt(cipherAnswerPayload, true);
             pending.pc._remotePeerId = remotePeerId;
+
+            if (decryptedAnswer.binding) {
+              const verifyResult = await SDPSecureSignaling.verifySignedBinding(
+                decryptedAnswer.binding,
+                decryptedAnswer.sdp
+              );
+              if (!verifyResult.valid) {
+                logger.error('P2P Mesh', `❌ Rejet Réponse SDP : Échec Binding Anti-MitM (${verifyResult.reason})`);
+                return;
+              }
+            }
+
             await pending.pc.setRemoteDescription(new RTCSessionDescription({
               type: decryptedAnswer.type || 'answer',
               sdp: decryptedAnswer.sdp
             }));
+
+            const iceMgr = this.iceManagers.get(remotePeerId);
+            if (iceMgr) await iceMgr.onRemoteDescriptionSet();
 
             this.setupConnectedPeer(remotePeerId, pending.pc, pending.controlChannel, pending.dataChannel);
             this.activeOffers.delete(data.offer_id);
@@ -498,7 +604,7 @@ export class P2PMeshNetwork {
     }
   }
 
-  // --- Signalement via Relais Nostr (NIP-01 / NIP-40) ---
+  // --- Signalement via Relais Nostr ---
 
   connectToNostrRelay(relayUrl) {
     try {
@@ -506,7 +612,7 @@ export class P2PMeshNetwork {
       this.nostrRelays.set(relayUrl, ws);
 
       ws.onopen = () => {
-        logger.info('P2P Mesh', `⚡ Connecté au relais Nostr: ${relayUrl}`);
+        logger.info('P2P Mesh', `⚡ Connecté relais Nostr: ${relayUrl}`);
         const subId = `sub_${Math.random().toString(36).substr(2, 6)}`;
         const req = ['REQ', subId, {
           kinds: [CONFIG.NOSTR?.KIND_SIGNALING || 29000, CONFIG.NOSTR?.KIND_SIGNALING_ASYNC || 29001],
@@ -533,16 +639,14 @@ export class P2PMeshNetwork {
 
           await this.handleTrackerMessage(payload, ws);
         } catch (e) {
-          logger.warn('P2P Mesh', 'Erreur traitement événement Nostr:', e);
+          logger.warn('P2P Mesh', 'Erreur traitement Nostr:', e);
         }
       };
 
-      ws.onerror = (err) => { logger.warn('P2P Mesh', `Erreur WebSocket relais Nostr (${relayUrl}):`, err); };
-      ws.onclose = () => {
-        this.nostrRelays.delete(relayUrl);
-      };
+      ws.onerror = (err) => { logger.warn('P2P Mesh', `Erreur WebSocket Nostr (${relayUrl}):`, err); };
+      ws.onclose = () => { this.nostrRelays.delete(relayUrl); };
     } catch (e) {
-      logger.warn('P2P Mesh', `Exception connexion relais Nostr (${relayUrl}):`, e);
+      logger.warn('P2P Mesh', `Exception Nostr (${relayUrl}):`, e);
     }
   }
 
@@ -550,7 +654,9 @@ export class P2PMeshNetwork {
 
   createPeerConnection(remotePeerId, options = {}) {
     const forceRelay = CONFIG.PRIVACY?.FORCE_RELAY_ONLY === true;
-    const poolSize = options.poolSize !== undefined ? options.poolSize : (forceRelay ? 0 : 2);
+    const poolSize = options.poolSize !== undefined 
+      ? options.poolSize 
+      : (forceRelay ? 0 : (CONFIG.ICE_CONFIG?.CANDIDATE_POOL_SIZE || 2));
 
     const pc = new RTCPeerConnection({
       iceServers: CONFIG.ICE_SERVERS,
@@ -562,13 +668,19 @@ export class P2PMeshNetwork {
 
     pc._remotePeerId = remotePeerId || null;
 
+    const iceMgr = new IceCandidateManager(pc, remotePeerId || 'pending');
+    if (remotePeerId) {
+      this.iceManagers.set(remotePeerId, iceMgr);
+    }
+    pc._iceManager = iceMgr;
+
     let controlChannel = null;
     let dataChannel = null;
 
     pc.ondatachannel = (event) => {
       const channel = event.channel;
       const pid = pc._remotePeerId;
-      logger.info('P2P Mesh', `📦 Canal de données reçu du pair [${pid || 'nouveau'}]: "${channel.label}"`);
+      logger.info('P2P Mesh', `📦 Canal reçu [${pid || 'nouveau'}]: "${channel.label}"`);
       if (channel.label === 'p2p-control') {
         controlChannel = channel;
         this.setupControlChannel(channel, pid);
@@ -584,7 +696,7 @@ export class P2PMeshNetwork {
 
     pc.ontrack = (event) => {
       const pid = pc._remotePeerId;
-      logger.info('P2P Mesh', `🎥 Piste média reçue [Kind: ${event.track.kind}, TrackID: ${event.track.id}] de ${pid}`);
+      logger.info('P2P Mesh', `🎥 Piste reçue [Kind: ${event.track.kind}] de ${pid}`);
       this.applyReceiverJitterTarget(pc, CONFIG.MEDIA?.DEFAULT_JITTER_TARGET_MS || 50);
       this.emit('track-received', {
         peerId: pid,
@@ -593,7 +705,6 @@ export class P2PMeshNetwork {
       });
     };
 
-    // Gestion du cycle de vie de connexion avec période de grâce anti-coupure Wi-Fi/4G
     pc.oniceconnectionstatechange = () => {
       const pid = pc._remotePeerId;
       const state = pc.iceConnectionState;
@@ -601,7 +712,6 @@ export class P2PMeshNetwork {
 
       if (state === 'connected' || state === 'completed') {
         this._clearGraceTimer(pid);
-        logger.info('P2P Mesh', `🌟 Connexion directe WebRTC P2P ÉTABLIE avec ${pid || 'pair distant'} !`);
       } else if (state === 'disconnected') {
         this._handlePeerDisconnected(pid, pc);
       } else if (state === 'failed') {
@@ -615,7 +725,6 @@ export class P2PMeshNetwork {
     pc.onconnectionstatechange = () => {
       const pid = pc._remotePeerId;
       const state = pc.connectionState;
-      logger.info('P2P Mesh', `🌐 connectionState [${pid || 'nouveau'}] : ${state}`);
       if (state === 'connected') {
         this._clearGraceTimer(pid);
       } else if (state === 'failed') {
@@ -628,14 +737,14 @@ export class P2PMeshNetwork {
 
   _handlePeerDisconnected(peerId, pc) {
     if (!peerId) return;
-    const graceMs = CONFIG.TIMINGS?.ICE_DISCONNECT_GRACE_MS || 4000;
-    logger.warn('P2P Mesh', `⚠️ Liaison instable avec ${peerId}. Délai de grâce (${graceMs} ms)...`);
+    const graceMs = CONFIG.TIMINGS?.ICE_DISCONNECT_GRACE_MS || 2000;
+    logger.warn('P2P Mesh', `⚠️ Liaison instable avec ${peerId}. Grâce (${graceMs} ms)...`);
 
     this._clearGraceTimer(peerId);
     const timer = setTimeout(async () => {
       if (pc.iceConnectionState === 'disconnected') {
-        logger.warn('P2P Mesh', `⏰ Expiration grâce pour ${peerId} -> déclenchement ICE Restart...`);
-        await this.triggerIceRestart(peerId);
+        logger.warn('P2P Mesh', `⏰ Expiration grâce pour ${peerId} -> ICE Restart...`);
+        await this.triggerResilientRecovery(peerId);
       }
     }, graceMs);
 
@@ -645,8 +754,8 @@ export class P2PMeshNetwork {
   _handlePeerFailed(peerId, pc) {
     this._clearGraceTimer(peerId);
     if (!peerId) return;
-    logger.warn('P2P Mesh', `❌ Échec ICE avec ${peerId}, tentative ultime de récupération...`);
-    this.triggerIceRestart(peerId).catch(() => this.removePeer(peerId));
+    logger.warn('P2P Mesh', `❌ Échec ICE avec ${peerId}, récupération résiliente...`);
+    this.triggerResilientRecovery(peerId).catch(() => this.removePeer(peerId));
   }
 
   _clearGraceTimer(peerId) {
@@ -656,53 +765,59 @@ export class P2PMeshNetwork {
     }
   }
 
-  async triggerIceRestart(peerId) {
+  async triggerResilientRecovery(peerId) {
     if (!peerId || this.iceRestartInProgress.has(peerId)) return;
     this.iceRestartInProgress.add(peerId);
 
     const peer = this.peers.get(peerId);
-    if (!peer || !peer.connection) {
-      this.iceRestartInProgress.delete(peerId);
-      return;
-    }
+    logger.warn('P2P Mesh', `⚡ Récupération résiliente pour ${peerId}...`);
 
     try {
-      logger.info('P2P Mesh', `🔄 Déclenchement d'un ICE Restart in-place pour ${peerId}...`);
-      if (typeof peer.connection.restartIce === 'function') {
-        peer.connection.restartIce();
+      if (peer && peer.connection && peer.connection.signalingState !== 'closed') {
+        if (typeof peer.connection.restartIce === 'function') {
+          peer.connection.restartIce();
+        }
+        if (peer.controlChannel && peer.controlChannel.readyState === 'open') {
+          await this.renegotiatePeer(peerId);
+          this.iceRestartInProgress.delete(peerId);
+          return;
+        }
       }
-      if (peer.controlChannel && peer.controlChannel.readyState === 'open') {
-        await this.renegotiatePeer(peerId);
-      }
+
+      await this.announceAllTrackers();
     } catch (err) {
-      logger.warn('P2P Mesh', `Échec ICE restart vers ${peerId}:`, err);
-      this.removePeer(peerId);
+      logger.error('P2P Mesh', `Échec récupération résiliente pour ${peerId}:`, err);
     } finally {
-      this.iceRestartInProgress.delete(peerId);
+      setTimeout(() => {
+        this.iceRestartInProgress.delete(peerId);
+      }, 3000);
     }
   }
 
   setupControlChannel(channel, peerId) {
     const incomingFragments = new Map();
+    const rateLimiter = new InboundRateLimiter({ maxTokens: 60, refillRatePerSec: 30 });
 
     channel.onopen = () => this._handleControlChannelOpen(peerId);
 
     channel.onmessage = async (event) => {
       try {
+        if (!rateLimiter.allowMessage(event.data?.length || 100)) {
+          logger.warn('P2P Mesh', `⚠️ Ingress Rate Limit dépassé pour ${peerId}`);
+          return;
+        }
+
         let fullPayloadStr = event.data;
         const parsed = JSON.parse(event.data);
 
-        // Réassemblage des messages fragmentés
         if (parsed && parsed._isFrag) {
           const { _fragId, _part, _total, _data } = parsed;
-
           const MAX_PARTS = CONFIG.LIMITS.MAX_FRAGMENT_PARTS;
           const MAX_ASSEMBLED = CONFIG.LIMITS.MAX_ASSEMBLED_CONTROL_BYTES;
           if (typeof _fragId !== 'string' ||
               !Number.isInteger(_total) || _total < 1 || _total > MAX_PARTS ||
               !Number.isInteger(_part) || _part < 0 || _part >= _total ||
               typeof _data !== 'string') {
-            logger.warn('P2P Mesh', `Fragment invalide rejeté de ${peerId}`);
             return;
           }
 
@@ -720,7 +835,6 @@ export class P2PMeshNetwork {
             item.parts.set(_part, _data);
             item.bytes += _data.length;
             if (item.bytes > MAX_ASSEMBLED) {
-              logger.warn('P2P Mesh', `Message fragmenté trop grand de ${peerId} — abandon`);
               incomingFragments.delete(_fragId);
               return;
             }
@@ -739,16 +853,14 @@ export class P2PMeshNetwork {
         const rawCipher = typeof fullPayloadStr === 'string' ? JSON.parse(fullPayloadStr) : fullPayloadStr;
         const message = await this.vault.decrypt(rawCipher, false);
 
-        // Traitement de la renégociation SDP in-band
-        if (message.type === 'MEDIA_RENEGOTIATE_OFFER') {
-          await this.handleRenegotiateOffer(peerId, message.offer);
+        if (message.type === 'SDP_OFFER' || message.type === 'MEDIA_RENEGOTIATE_OFFER') {
+          await this.handleRemoteDescription(peerId, message.description || message.offer);
           return;
-        } else if (message.type === 'MEDIA_RENEGOTIATE_ANSWER') {
-          await this.handleRenegotiateAnswer(peerId, message.answer);
+        } else if (message.type === 'SDP_ANSWER' || message.type === 'MEDIA_RENEGOTIATE_ANSWER') {
+          await this.handleRemoteDescription(peerId, message.description || message.answer);
           return;
         }
 
-        // Traitement de diffusion Gossip enveloppée
         if (message && message._gspId) {
           if (!this.processedGossipIds.addIfNew(message._gspId)) return;
           this.emit('message-received', { peerId: message._origin || peerId, message: message.payload });
@@ -795,11 +907,20 @@ export class P2PMeshNetwork {
       logger.info('P2P Mesh', `🟢 Canal binaire 'p2p-data' OUVERT avec ${peerId}`);
     };
 
-    channel.onmessage = (event) => {
-      this.emit('chunk-received', {
-        peerId,
-        buffer: event.data
-      });
+    channel.onmessage = async (event) => {
+      try {
+        const raw = event.data;
+        if (raw instanceof ArrayBuffer && new Uint8Array(raw)[0] === 0x50) {
+          await this.binaryRouter.decodeAndRoute(raw, peerId);
+        } else {
+          this.emit('chunk-received', {
+            peerId,
+            buffer: raw
+          });
+        }
+      } catch (err) {
+        logger.debug('P2P Mesh', 'Erreur réception binaire:', err);
+      }
     };
   }
 
@@ -877,6 +998,7 @@ export class P2PMeshNetwork {
     if (peer) {
       this._teardownPeerConnection(peer);
       this.peers.delete(peerId);
+      this.iceManagers.delete(peerId);
       logger.info('P2P Mesh', `🔴 Pair retiré : ${peerId} (Restants: ${this.peers.size})`);
       this.emit('peer-left', { peerId, info: peer });
       this.emit('status-change', { 
@@ -887,62 +1009,115 @@ export class P2PMeshNetwork {
     }
   }
 
-  // --- Renégociation WebRTC In-Band ---
+  // --- Automate Perfect Negotiation W3C & Rollbacks ---
+
+  _getOrCreateNegotiationState(peerId, remotePubkeyHex = '') {
+    const peer = this.peers.get(peerId);
+    if (!peer) return null;
+    if (!peer._negotiation) {
+      peer._negotiation = new PeerNegotiationState(peerId, this.signalingPeerId, remotePubkeyHex);
+      logger.info('P2P Mesh', `🎭 Rôle Perfect Negotiation pour ${peerId} : [${peer._negotiation.isPolite ? 'POLI' : 'IMPOLI'}]`);
+    }
+    return peer._negotiation;
+  }
 
   async renegotiatePeer(peerId) {
     const peer = this.peers.get(peerId);
-    if (!peer || !peer.connection || !peer.controlChannel || peer.controlChannel.readyState !== 'open') return;
+    if (!peer || !peer.connection || peer.connection.signalingState === 'closed') return;
+
+    const neg = this._getOrCreateNegotiationState(peerId);
+    if (!neg) return;
+
+    if (neg.makingOffer) {
+      neg.queuedNegotiation = true;
+      return;
+    }
+
+    const pc = peer.connection;
+    const startTime = Date.now();
 
     try {
-      logger.info('P2P Mesh', `🔄 Renégociation WebRTC in-band vers ${peerId}...`);
-      const offer = await peer.connection.createOffer();
-      await peer.connection.setLocalDescription(offer);
-      const completeOffer = await this.waitForIceGathering(peer.connection, 1500, 200);
+      neg.makingOffer = true;
+      logger.info('P2P Mesh', `🔄 [${peerId}] Début de renégociation Perfect Negotiation...`);
+
+      const offer = await pc.createOffer();
+      if (pc.signalingState !== 'stable') return;
+
+      await pc.setLocalDescription(offer);
+      neg.metrics.offersCreated++;
 
       await this.sendToPeer(peerId, {
-        type: 'MEDIA_RENEGOTIATE_OFFER',
-        offer: {
-          type: completeOffer.type,
-          sdp: completeOffer.sdp
+        type: 'SDP_OFFER',
+        description: {
+          type: pc.localDescription.type,
+          sdp: pc.localDescription.sdp
         }
       });
-    } catch (e) {
-      logger.warn('P2P Mesh', `Échec renégociation vers ${peerId}:`, e);
+    } catch (err) {
+      logger.error('P2P Mesh', `❌ [${peerId}] Échec renegotiatePeer:`, err);
+    } finally {
+      neg.makingOffer = false;
+      neg.metrics.lastNegotiationDurationMs = Date.now() - startTime;
+
+      if (neg.queuedNegotiation) {
+        neg.queuedNegotiation = false;
+        setTimeout(() => this.renegotiatePeer(peerId), 50);
+      }
     }
   }
 
-  async handleRenegotiateOffer(peerId, offer) {
+  async handleRemoteDescription(peerId, description) {
     const peer = this.peers.get(peerId);
-    if (!peer || !peer.connection) return;
+    if (!peer || !peer.connection || peer.connection.signalingState === 'closed') return;
 
-    try {
-      logger.info('P2P Mesh', `📥 Traitement offre de renégociation média de ${peerId}...`);
-      await peer.connection.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await peer.connection.createAnswer();
-      await peer.connection.setLocalDescription(answer);
-      const completeAnswer = await this.waitForIceGathering(peer.connection, 1500, 200);
+    const neg = this._getOrCreateNegotiationState(peerId);
+    const pc = peer.connection;
+    const isOffer = description.type === 'offer';
 
-      await this.sendToPeer(peerId, {
-        type: 'MEDIA_RENEGOTIATE_ANSWER',
-        answer: {
-          type: completeAnswer.type,
-          sdp: completeAnswer.sdp
-        }
-      });
-    } catch (e) {
-      logger.warn('P2P Mesh', `Erreur réponse renégociation ${peerId}:`, e);
+    const readyForOffer = !neg.makingOffer && (pc.signalingState === 'stable' || neg.isSettingRemoteAnswerPending);
+    const offerCollision = isOffer && !readyForOffer;
+
+    neg.ignoreOffer = !neg.isPolite && offerCollision;
+
+    if (neg.ignoreOffer) {
+      neg.metrics.glareCollisions++;
+      logger.warn('P2P Mesh', `🛡️ [Impolite] Glare détecté avec ${peerId}. Offre concurrente ignorée.`);
+      return;
     }
-  }
 
-  async handleRenegotiateAnswer(peerId, answer) {
-    const peer = this.peers.get(peerId);
-    if (!peer || !peer.connection) return;
+    if (offerCollision && neg.isPolite) {
+      neg.metrics.glareCollisions++;
+      neg.metrics.rollbacksExecuted++;
+      logger.info('P2P Mesh', `🙇 [Polite] Glare détecté avec ${peerId}. Exécution rollback W3C...`);
+      await pc.setLocalDescription({ type: 'rollback' });
+    }
 
+    neg.isSettingRemoteAnswerPending = !isOffer;
     try {
-      logger.info('P2P Mesh', `✅ Renégociation média complétée avec ${peerId} !`);
-      await peer.connection.setRemoteDescription(new RTCSessionDescription(answer));
-    } catch (e) {
-      logger.warn('P2P Mesh', `Erreur finalisation renégociation ${peerId}:`, e);
+      await pc.setRemoteDescription(new RTCSessionDescription(description));
+    } catch (err) {
+      logger.error('P2P Mesh', `❌ Erreur setRemoteDescription (${description.type}) de ${peerId}:`, err);
+      return;
+    } finally {
+      neg.isSettingRemoteAnswerPending = false;
+    }
+
+    if (isOffer) {
+      try {
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        neg.metrics.answersCreated++;
+
+        await this.sendToPeer(peerId, {
+          type: 'SDP_ANSWER',
+          description: {
+            type: pc.localDescription.type,
+            sdp: pc.localDescription.sdp
+          }
+        });
+      } catch (err) {
+        logger.error('P2P Mesh', `❌ Erreur création réponse ${peerId}:`, err);
+      }
     }
   }
 
@@ -956,8 +1131,8 @@ export class P2PMeshNetwork {
 
     const encrypted = await this.vault.encrypt(payload, false);
     const jsonStr = JSON.stringify(encrypted);
-    const MAX_CHUNK_SIZE = CONFIG.LIMITS.MAX_DATACHANNEL_CHUNK || 15000;
-    const HIGH_WATERMARK = 64 * 1024; // 64 Ko
+    const MAX_CHUNK_SIZE = CONFIG.LIMITS?.MAX_DATACHANNEL_CHUNK || 15000;
+    const HIGH_WATERMARK = 64 * 1024;
 
     const drainBuffer = async () => {
       if (peer.controlChannel.bufferedAmount <= HIGH_WATERMARK) return;
@@ -967,7 +1142,7 @@ export class P2PMeshNetwork {
           resolve();
         };
         peer.controlChannel.addEventListener('bufferedamountlow', handler);
-        setTimeout(handler, 1000); // Garde-fou
+        setTimeout(handler, 1000);
       });
     };
 
@@ -995,15 +1170,12 @@ export class P2PMeshNetwork {
     return true;
   }
 
-  /**
-   * Broadcast avec chiffrement unique (Single-Encrypt Multi-Send)
-   */
   async broadcast(payload, excludePeerId = null) {
     if (this.peers.size === 0) return 0;
 
     const encrypted = await this.vault.encrypt(payload, false);
     const jsonStr = JSON.stringify(encrypted);
-    const MAX_CHUNK_SIZE = CONFIG.LIMITS.MAX_DATACHANNEL_CHUNK || 15000;
+    const MAX_CHUNK_SIZE = CONFIG.LIMITS?.MAX_DATACHANNEL_CHUNK || 15000;
 
     const sendPromises = [];
 
@@ -1032,103 +1204,24 @@ export class P2PMeshNetwork {
     return results.filter(r => r.status === 'fulfilled' && r.value).length;
   }
 
-  /**
-   * Envoi de blocs binaires découpés (16 Ko MTU Safe & En-tête Compact 41 octets)
-   */
   async sendBinaryChunkSliced(peerId, hashHex, arrayBuffer) {
     const peer = this.peers.get(peerId);
     if (!peer || !peer.dataChannel || peer.dataChannel.readyState !== 'open') return false;
 
-    const dc = peer.dataChannel;
-    const HEADER_SIZE = 41;
-    const TOTAL_PACKET_SIZE = 16384; // 16 Ko pile
-    const SLICE_PAYLOAD_SIZE = TOTAL_PACKET_SIZE - HEADER_SIZE; // 16343 octets
-    const totalSlices = Math.ceil(arrayBuffer.byteLength / SLICE_PAYLOAD_SIZE);
-    const rawHashBytes = new Uint8Array(CryptoVault.hexToBuffer(hashHex));
-
-    // Seuil de réveil et de suspension adaptatif (64 Ko en appel, 256 Ko au repos)
-    const lowThreshold = this.isMediaActive() ? 64 * 1024 : 128 * 1024;
-    dc.bufferedAmountLowThreshold = lowThreshold;
-
-    for (let sliceIdx = 0; sliceIdx < totalSlices; sliceIdx++) {
-      if (dc.readyState !== 'open') return false;
-
-      // Attente événementielle pure sans boucle setTimeout
-      if (dc.bufferedAmount > lowThreshold) {
-        await new Promise((resolve) => {
-          const handler = () => {
-            dc.removeEventListener('bufferedamountlow', handler);
-            resolve();
-          };
-          dc.addEventListener('bufferedamountlow', handler);
-          setTimeout(handler, 2000); // Garde-fou
-        });
-      }
-
-      const start = sliceIdx * SLICE_PAYLOAD_SIZE;
-      const end = Math.min(start + SLICE_PAYLOAD_SIZE, arrayBuffer.byteLength);
-      const sliceLength = end - start;
-
-      const packet = new Uint8Array(HEADER_SIZE + sliceLength);
-      packet[0] = 0xFD; // Magic byte bloc Drive
-      packet.set(rawHashBytes, 1);
-
-      const view = new DataView(packet.buffer);
-      view.setUint16(33, sliceIdx, false);
-      view.setUint16(35, totalSlices, false);
-      view.setUint32(37, arrayBuffer.byteLength, false);
-
-      // Zéro-Copie : vue directe sur le buffer source
-      packet.set(new Uint8Array(arrayBuffer, start, sliceLength), HEADER_SIZE);
-
-      try {
-        dc.send(packet.buffer);
-      } catch (err) {
-        logger.error('P2P Mesh', `Erreur send() binaire vers ${peerId}:`, err);
-        return false;
-      }
-    }
-    return true;
+    return this.flowController.sendBinaryChunkPaced(peer.dataChannel, hashHex, arrayBuffer, {
+      rttMs: peer.latencyMs || 30,
+      isMediaActive: this.isMediaActive()
+    });
   }
 
-  // --- Gestion des Pistes Média (Audio/Vidéo), Codecs & QoS (Personas 5.4, 5.5, 5.9) ---
+  // --- Gestion des Pistes Média (Audio/Vidéo) & QoS ---
 
   _configureTransceiverCodecs(transceiver, kind) {
-    if (!transceiver || typeof transceiver.setCodecPreferences !== 'function') return;
-
-    if (kind === 'audio') {
-      const caps = RTCRtpSender.getCapabilities ? RTCRtpSender.getCapabilities('audio') : null;
-      if (!caps || !caps.codecs) return;
-      const opus = caps.codecs.find(c => c.mimeType.toLowerCase() === 'audio/opus');
-      if (opus) {
-        const fmtp = CONFIG.MEDIA?.AUDIO?.OPUS_FMTP || 'minptime=10;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0;maxplaybackrate=48000;maxaveragebitrate=32000;cbr=0';
-        const enhancedOpus = { ...opus, sdpFmtpLine: fmtp };
-        const others = caps.codecs.filter(c => c !== opus);
-        try {
-          transceiver.setCodecPreferences([enhancedOpus, ...others]);
-        } catch (e) {
-          logger.debug('P2P Mesh', 'Avertissement setCodecPreferences audio:', e);
-        }
-      }
-    } else if (kind === 'video') {
-      const caps = RTCRtpSender.getCapabilities ? RTCRtpSender.getCapabilities('video') : null;
-      if (!caps || !caps.codecs) return;
-      const preferredOrder = CONFIG.MEDIA?.VIDEO?.PREFERRED_CODECS || ['video/VP9', 'video/H264', 'video/VP8', 'video/AV1'];
-      const sortedCodecs = caps.codecs.slice().sort((a, b) => {
-        const idxA = preferredOrder.findIndex(m => a.mimeType.toLowerCase() === m.toLowerCase());
-        const idxB = preferredOrder.findIndex(m => b.mimeType.toLowerCase() === m.toLowerCase());
-        return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
-      });
-      try {
-        transceiver.setCodecPreferences(sortedCodecs);
-      } catch (e) {
-        logger.debug('P2P Mesh', 'Avertissement setCodecPreferences vidéo:', e);
-      }
-    }
+    SDPOptimizer.applyCodecPreferences(transceiver, kind);
   }
 
   async attachLocalMediaStream(stream) {
-    logger.info('P2P Mesh', '🎙️ Injection du MediaStream local avec codecs optimisés et QoS dans les connexions Mesh...');
+    logger.info('P2P Mesh', '🎙️ Injection MediaStream local avec codecs optimisés et QoS...');
     this.localMediaStream = stream;
 
     for (const [peerId, peer] of this.peers) {
@@ -1177,10 +1270,29 @@ export class P2PMeshNetwork {
     }
   }
 
-  async replaceVideoTrack(track, hint = 'motion') {
-    if (track) {
-      track.contentHint = hint;
+  async replaceAudioTrack(track) {
+    if (track) track.contentHint = 'speech';
+
+    for (const [peerId, peer] of this.peers) {
+      if (!peer.connection) continue;
+      const senders = peer.connection.getSenders();
+      const audioSender = senders.find(s => s.track && s.track.kind === 'audio') ||
+        senders.find(s => !s.track && peer.connection.getTransceivers().some(t => t.sender === s));
+
+      if (audioSender) {
+        try {
+          await audioSender.replaceTrack(track);
+          await this._applySenderQoS(audioSender, 'audio');
+          logger.info('P2P Mesh', `🎙️ [Hot-Swap] replaceAudioTrack réussi pour ${peerId}`);
+        } catch (err) {
+          logger.warn('P2P Mesh', `Erreur replaceAudioTrack pour ${peerId}:`, err);
+        }
+      }
     }
+  }
+
+  async replaceVideoTrack(track, hint = 'motion') {
+    if (track) track.contentHint = hint;
     const isScreenShare = hint === 'detail';
 
     for (const [peerId, peer] of this.peers) {
@@ -1200,18 +1312,42 @@ export class P2PMeshNetwork {
     }
   }
 
+  applyVideoBitrate(peerId, rttMs, isScreenShare = false) {
+    const peer = this.peers.get(peerId);
+    if (!peer || !peer.connection) return;
+    const senders = peer.connection.getSenders ? peer.connection.getSenders() : [];
+    const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+    if (!videoSender || !videoSender.getParameters) return;
+
+    try {
+      const params = videoSender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+      
+      let targetBitrate = isScreenShare ? 2800000 : 1800000;
+      if (rttMs > 250) targetBitrate = Math.round(targetBitrate * 0.4);
+      else if (rttMs > 120) targetBitrate = Math.round(targetBitrate * 0.7);
+
+      params.encodings[0].maxBitrate = targetBitrate;
+      videoSender.setParameters(params).catch(() => {});
+    } catch (e) {}
+  }
+
+  resyncPeerJitterBuffers(pc, offsetMs) {
+    if (this.qualityManager) {
+      this.qualityManager.resyncPeerJitterBuffers(pc, offsetMs);
+    }
+  }
+
   async _applySenderQoS(sender, kind, isScreenShare = false) {
     if (!sender || !sender.getParameters) return;
     try {
       const params = sender.getParameters();
-      if (!params.encodings || params.encodings.length === 0) {
-        params.encodings = [{}];
-      }
+      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
 
       if (kind === 'audio') {
         params.encodings[0].priority = 'high';
         params.encodings[0].networkPriority = 'high';
-        params.encodings[0].maxBitrate = CONFIG.MEDIA?.AUDIO?.MAX_BITRATE || 32000;
+        params.encodings[0].maxBitrate = CONFIG.MEDIA?.AUDIO?.MAX_BITRATE || 128000;
       } else if (kind === 'video') {
         if (isScreenShare) {
           params.encodings[0].priority = 'medium';
@@ -1228,54 +1364,7 @@ export class P2PMeshNetwork {
 
       await sender.setParameters(params);
     } catch (err) {
-      logger.debug('P2P Mesh', 'Avertissement configuration QoS sender:', err.message);
-    }
-  }
-
-  async applyVideoBitrate(peerId, effectiveRttMs, isScreenShare = false) {
-    const peer = this.peers.get(peerId);
-    if (!peer || !peer.connection) return;
-
-    const sender = peer.connection.getSenders().find(s => s.track && s.track.kind === 'video');
-    if (!sender || !sender.getParameters) return;
-
-    try {
-      const params = sender.getParameters();
-      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-
-      if (isScreenShare) {
-        const screenCfg = CONFIG.VIDEO_BITRATE?.SCREEN_SHARE || {};
-        params.encodings[0].maxBitrate = screenCfg.maxBitrate || 1800000;
-        params.encodings[0].scaleResolutionDownBy = 1.0;
-        params.encodings[0].maxFramerate = screenCfg.maxFramerate || 15;
-        params.degradationPreference = 'maintain-resolution';
-      } else {
-        // Quota d'upload partagé par pair (Mesh Uplink Budgeting)
-        const activeVideoPeers = Array.from(this.peers.values()).filter(p =>
-          p.connection && p.connection.getSenders().some(s => s.track && s.track.kind === 'video')
-        ).length || 1;
-
-        const totalUplinkCap = CONFIG.VIDEO_BITRATE?.TOTAL_UPLINK_CAP_BPS || 3500000;
-        const perPeerCap = Math.floor(totalUplinkCap / activeVideoPeers);
-
-        let step = CONFIG.VIDEO_BITRATE.LADDER[CONFIG.VIDEO_BITRATE.LADDER.length - 1];
-        for (const candidate of CONFIG.VIDEO_BITRATE.LADDER) {
-          if (effectiveRttMs <= candidate.maxRtt) {
-            step = candidate;
-            break;
-          }
-        }
-
-        const targetBitrate = Math.min(step.maxBitrate, perPeerCap);
-        params.encodings[0].maxBitrate = targetBitrate;
-        params.encodings[0].scaleResolutionDownBy = step.scaleResolutionDownBy || 1.0;
-        params.encodings[0].maxFramerate = step.maxFramerate || 30;
-        params.degradationPreference = 'maintain-framerate';
-      }
-
-      await sender.setParameters(params);
-    } catch (e) {
-      logger.debug('P2P Mesh', 'Avertissement setParameters adaptatif:', e.message);
+      logger.debug('P2P Mesh', 'Avertissement QoS sender:', err.message);
     }
   }
 
@@ -1290,20 +1379,9 @@ export class P2PMeshNetwork {
     });
   }
 
-  resyncPeerJitterBuffers(pc, offsetMs) {
-    if (!pc || typeof pc.getReceivers !== 'function') return;
-    const baseTarget = CONFIG.MEDIA?.DEFAULT_JITTER_TARGET_MS || 50;
-    // Si dérive A/V, applique temporairement un léger ajustement
-    const adjustedTarget = Math.max(30, Math.min(180, baseTarget + Math.abs(offsetMs)));
-    this.applyReceiverJitterTarget(pc, adjustedTarget);
-    setTimeout(() => {
-      this.applyReceiverJitterTarget(pc, baseTarget);
-    }, 4000);
-  }
-
   removeLocalMediaStream() {
     if (this.localMediaStream) {
-      logger.info('P2P Mesh', '⏹️ Arrêt du MediaStream local');
+      logger.info('P2P Mesh', '⏹️ Arrêt MediaStream local');
       this.localMediaStream.getTracks().forEach(t => t.stop());
       this.localMediaStream = null;
     }
@@ -1336,10 +1414,8 @@ export class P2PMeshNetwork {
     }
   }
 
-  // --- Gestion du Cycle de Vie Réseau Système (Online/Offline) ---
-
   handleNetworkOnline() {
-    logger.info('P2P Mesh', '🌐 Rétablissement de la connexion réseau : réactivation proactive...');
+    logger.info('P2P Mesh', '🌐 Rétablissement connexion réseau : réactivation proactive...');
     for (const trackerUrl of CONFIG.TRACKERS) {
       const existing = this.trackers.get(trackerUrl);
       if (!existing || existing.readyState !== WebSocket.OPEN) {
@@ -1356,6 +1432,6 @@ export class P2PMeshNetwork {
   }
 
   handleNetworkOffline() {
-    logger.warn('P2P Mesh', '🔌 Perte de connectivité Internet détectée.');
+    logger.warn('P2P Mesh', '🔌 Perte de connectivité Internet.');
   }
 }

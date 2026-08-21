@@ -1,9 +1,10 @@
 /**
- * Gestionnaire Centralisé de l'Énergie & Screen Wake Lock (Standards 2025/2026)
- * - Registre de verrous d'activité nommés à comptage de références (Multi-tenant)
- * - Ré-acquisition automatique sur reprise de visibilité (W3C Screen Wake Lock API)
+ * Gestionnaire Centralisé de l'Énergie & Screen Wake Lock (Standards 2025/2026 - Pass 4 Hardened)
+ * - Registre de verrous nommés à comptage de références (Multi-tenant)
+ * - Ré-acquisition robuste et non-bloquante (W3C Screen Wake Lock API)
+ * - Protection contre la concurrence et cycle de vie Page Lifecycle (visibilitychange / pageshow)
  * - Surveillance de la batterie (Battery Status API) & Bascule Eco-Mode
- * - Pontage vers chrome.power en contexte Extension Chrome MV3
+ * - Pontage MV3 chrome.power
  */
 
 import { logger } from './logger.js';
@@ -17,36 +18,36 @@ export class PowerManager {
     this.isEcoMode = false;
     this.listeners = new Set();
     this.isExtension = typeof chrome !== 'undefined' && typeof chrome.runtime?.sendMessage === 'function';
+    this._lockAcquiringPromise = null;
 
-    this.initVisibilityHandler();
+    this.initLifecycleHandlers();
     this.initBatteryMonitoring();
   }
 
-  /**
-   * Initialise la surveillance du cycle de vie de la page pour la ré-acquisition
-   */
-  initVisibilityHandler() {
+  initLifecycleHandlers() {
     if (typeof document === 'undefined') return;
 
-    document.addEventListener('visibilitychange', async () => {
-      logger.debug('Power', `Visibility state changé: "${document.visibilityState}"`);
+    const handleVisibility = async () => {
+      logger.debug('Power', `Visibility state: "${document.visibilityState}"`);
       if (document.visibilityState === 'visible') {
         if (this.activeLocks.size > 0 && !this.sentinel) {
           logger.info('Power', `🔄 Reprise de visibilité avec ${this.activeLocks.size} verrou(s) actif(s) -> Ré-acquisition.`);
           await this._requestNativeLock();
         }
       } else {
-        // La sentinelle est révoquée automatiquement par le navigateur
         this.sentinel = null;
       }
-    });
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pageshow', handleVisibility);
   }
 
-  /**
-   * Initialise la détection de la batterie (Battery Status API)
-   */
   async initBatteryMonitoring() {
-    if (typeof navigator === 'undefined' || !('getBattery' in navigator)) return;
+    if (typeof navigator === 'undefined' || !('getBattery' in navigator)) {
+      this._checkReducedMotionPreference();
+      return;
+    }
 
     try {
       this.battery = await navigator.getBattery();
@@ -62,14 +63,20 @@ export class PowerManager {
       this.battery.addEventListener('levelchange', evaluateBattery);
       this.battery.addEventListener('chargingchange', evaluateBattery);
       evaluateBattery();
-    } catch (err) {
-      logger.debug('Power', 'Battery Status API indisponible ou restreinte:', err);
+    } catch (_) {
+      this._checkReducedMotionPreference();
     }
   }
 
-  /**
-   * Active ou désactive le mode Économie d'Énergie
-   */
+  _checkReducedMotionPreference() {
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+      if (media.matches) {
+        this.setEcoMode(true);
+      }
+    }
+  }
+
   setEcoMode(enable) {
     if (this.isEcoMode === enable) return;
     this.isEcoMode = enable;
@@ -82,21 +89,16 @@ export class PowerManager {
     this._notifyListeners({ type: 'eco-mode-changed', isEcoMode: this.isEcoMode });
   }
 
-  /**
-   * Acquiert un verrou d'écran pour une opération critique
-   */
   async acquireLock(lockId, reason = '') {
     if (!lockId) return false;
 
     this.activeLocks.set(lockId, { reason, timestamp: Date.now() });
-    logger.info('Power', `🔒 Verrou demandé [${lockId}] - Raison: "${reason}" (Total actifs: ${this.activeLocks.size})`);
+    logger.info('Power', `🔒 Verrou demandé [${lockId}] - Raison: "${reason}" (Actifs: ${this.activeLocks.size})`);
 
-    // 1. Verrou natif Web Screen Wake Lock
     if (this.isSupported && typeof document !== 'undefined' && document.visibilityState === 'visible' && !this.sentinel) {
       await this._requestNativeLock();
     }
 
-    // 2. Maintien en tâche de fond Extension MV3
     if (this.isExtension) {
       try {
         chrome.runtime.sendMessage({ type: 'KEEP_AWAKE_ACQUIRE', lockId, reason }).catch(() => {});
@@ -107,14 +109,11 @@ export class PowerManager {
     return true;
   }
 
-  /**
-   * Libère un verrou d'activité
-   */
   async releaseLock(lockId) {
     if (!this.activeLocks.has(lockId)) return;
 
     this.activeLocks.delete(lockId);
-    logger.info('Power', `🔓 Verrou libéré [${lockId}] (Restants actifs: ${this.activeLocks.size})`);
+    logger.info('Power', `🔓 Verrou libéré [${lockId}] (Restants: ${this.activeLocks.size})`);
 
     if (this.activeLocks.size === 0) {
       if (this.sentinel) {
@@ -138,18 +137,27 @@ export class PowerManager {
   }
 
   async _requestNativeLock() {
-    try {
-      this.sentinel = await navigator.wakeLock.request('screen');
-      logger.info('Power', '✅ Screen Wake Lock natif acquis avec succès.');
+    if (this._lockAcquiringPromise) return this._lockAcquiringPromise;
 
-      this.sentinel.addEventListener('release', () => {
-        logger.debug('Power', 'ℹ️ Screen Wake Lock révoqué par le système/navigateur.');
+    this._lockAcquiringPromise = (async () => {
+      try {
+        if (typeof navigator === 'undefined' || !navigator.wakeLock) return;
+        this.sentinel = await navigator.wakeLock.request('screen');
+        logger.info('Power', '✅ Screen Wake Lock natif acquis avec succès.');
+
+        this.sentinel.addEventListener('release', () => {
+          logger.debug('Power', 'ℹ️ Screen Wake Lock révoqué par le système.');
+          this.sentinel = null;
+        });
+      } catch (err) {
+        logger.warn('Power', `⚠️ Screen Wake Lock non acquis: ${err.name} - ${err.message}`);
         this.sentinel = null;
-      });
-    } catch (err) {
-      logger.warn('Power', `⚠️ Impossible d'acquérir le Screen Wake Lock: ${err.name} - ${err.message}`);
-      this.sentinel = null;
-    }
+      } finally {
+        this._lockAcquiringPromise = null;
+      }
+    })();
+
+    return this._lockAcquiringPromise;
   }
 
   onPowerEvent(cb) {

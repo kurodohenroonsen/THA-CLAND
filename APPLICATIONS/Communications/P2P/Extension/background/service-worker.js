@@ -12,7 +12,7 @@ chrome.sidePanel
 // 2. Hydratation d'état idempotente depuis chrome.storage.session
 async function hydrateServiceWorkerState() {
   try {
-    const session = await chrome.storage.session.get(['badgeText', 'badgeColor', 'actionTitle']);
+    const session = await chrome.storage.session.get(['badgeText', 'badgeColor', 'actionTitle', 'keepAwakeCount']);
     if (session.badgeText !== undefined) {
       await chrome.action.setBadgeText({ text: session.badgeText });
       await chrome.action.setBadgeTextColor({ color: '#ffffff' });
@@ -23,6 +23,9 @@ async function hydrateServiceWorkerState() {
     if (session.actionTitle !== undefined) {
       await chrome.action.setTitle({ title: session.actionTitle });
     }
+    if (session.keepAwakeCount && session.keepAwakeCount > 0 && chrome.power) {
+      chrome.power.requestKeepAwake('system');
+    }
   } catch (err) {
     console.debug('[SW] Échec hydratation état de session:', err);
   }
@@ -32,10 +35,12 @@ hydrateServiceWorkerState();
 // 3. Gestionnaire d'installation & démarrage
 chrome.runtime.onInstalled.addListener(async (details) => {
   console.log('[SW] Extension installée/mise à jour:', details.reason);
+  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
   await chrome.action.setBadgeText({ text: '' });
   await chrome.action.setBadgeTextColor({ color: '#ffffff' });
   await chrome.action.setBadgeBackgroundColor({ color: '#ef4444' });
   await chrome.action.setTitle({ title: 'P2P Mesh Workspace : Prêt' });
+  
   // Alarme de maintenance périodique (toutes les 5 minutes)
   try {
     chrome.alarms.create('sw-maintenance-alarm', { periodInMinutes: 5 });
@@ -52,17 +57,20 @@ chrome.alarms?.onAlarm.addListener(async (alarm) => {
   }
 });
 
-// 5. Gestion atomique du document Offscreen
+// 5. Gestion atomique du document Offscreen (Conformité MV3 Single-Reason)
 let creatingOffscreenPromise = null;
 
 async function ensureOffscreenDocument() {
   const offscreenUrl = chrome.runtime.getURL('offscreen/offscreen.html');
-  const existingContexts = await chrome.runtime.getContexts({
-    contextTypes: ['OFFSCREEN_DOCUMENT'],
-    documentUrls: [offscreenUrl]
-  });
 
-  if (existingContexts.length > 0) return;
+  // Vérification de l'existence via getContexts (Chrome 116+)
+  if (chrome.runtime.getContexts) {
+    const existingContexts = await chrome.runtime.getContexts({
+      contextTypes: ['OFFSCREEN_DOCUMENT'],
+      documentUrls: [offscreenUrl]
+    });
+    if (existingContexts.length > 0) return;
+  }
 
   if (creatingOffscreenPromise) {
     await creatingOffscreenPromise;
@@ -70,16 +78,19 @@ async function ensureOffscreenDocument() {
   }
 
   try {
+    // CRITIQUE : Une seule raison valide par appel selon la spécification Chromium 2026
     creatingOffscreenPromise = chrome.offscreen.createDocument({
       url: offscreenUrl,
-      reasons: ['AUDIO_PLAYBACK', 'USER_MEDIA', 'WEB_RTC'],
-      justification: 'Maintien de la connexion WebRTC P2P et lecture des flux audio de groupe en tâche de fond'
+      reasons: ['AUDIO_PLAYBACK'],
+      justification: 'Maintien des flux audio de groupe et connexion WebRTC en tâche de fond'
     });
     await creatingOffscreenPromise;
-    console.log('[SW] Document Offscreen initialisé.');
+    console.log('[SW] Document Offscreen initialisé avec succès.');
   } catch (err) {
-    console.error('[SW] Erreur initialisation Offscreen:', err);
-    throw err;
+    if (!err.message?.includes('Only a single offscreen document may be created')) {
+      console.error('[SW] Erreur initialisation Offscreen:', err);
+      throw err;
+    }
   } finally {
     creatingOffscreenPromise = null;
   }
@@ -87,14 +98,19 @@ async function ensureOffscreenDocument() {
 
 async function closeOffscreenDocument() {
   const offscreenUrl = chrome.runtime.getURL('offscreen/offscreen.html');
-  const existingContexts = await chrome.runtime.getContexts({
-    contextTypes: ['OFFSCREEN_DOCUMENT'],
-    documentUrls: [offscreenUrl]
-  });
+  if (chrome.runtime.getContexts) {
+    const existingContexts = await chrome.runtime.getContexts({
+      contextTypes: ['OFFSCREEN_DOCUMENT'],
+      documentUrls: [offscreenUrl]
+    });
+    if (existingContexts.length === 0) return;
+  }
 
-  if (existingContexts.length > 0) {
+  try {
     await chrome.offscreen.closeDocument();
     console.log('[SW] Document Offscreen fermé.');
+  } catch (err) {
+    console.debug('[SW] Document Offscreen déjà fermé ou inexistant:', err);
   }
 }
 
@@ -102,20 +118,26 @@ async function closeOffscreenDocument() {
 const activePanels = new Map();
 
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name === 'sidepanel-lifecycle' || port.name === 'sidepanel-keepalive') {
+  if (
+    port.name === 'p2p-mesh-keepalive' ||
+    port.name === 'sidepanel-lifecycle' ||
+    port.name === 'sidepanel-keepalive'
+  ) {
     const windowId = port.sender?.tab?.windowId || port.sender?.windowId || 'default';
     activePanels.set(windowId, port);
-    console.debug(`[SW Lifecycle] Panel connecté (Window ${windowId}). Total: ${activePanels.size}`);
+    console.debug(`[SW Lifecycle] Panel connecté (Window: ${windowId}). Total actifs: ${activePanels.size}`);
 
     port.onMessage.addListener((msg) => {
       if (msg.type === 'PING') {
-        try { port.postMessage({ type: 'PONG', timestamp: Date.now() }); } catch (_) {}
+        try {
+          port.postMessage({ type: 'PONG', timestamp: Date.now() });
+        } catch (_) {}
       }
     });
 
     port.onDisconnect.addListener(async () => {
       activePanels.delete(windowId);
-      console.debug(`[SW Lifecycle] Panel déconnecté (Window ${windowId}). Restants: ${activePanels.size}`);
+      console.debug(`[SW Lifecycle] Panel déconnecté (Window: ${windowId}). Restants: ${activePanels.size}`);
       if (activePanels.size === 0) {
         await closeOffscreenDocument();
       }
@@ -123,13 +145,26 @@ chrome.runtime.onConnect.addListener((port) => {
   }
 });
 
+// Helper pour retrouver ou cibler une fenêtre de manière robuste
+async function getSafeTargetWindow() {
+  try {
+    const lastWindow = await chrome.windows.getLastFocused({ populate: false });
+    if (lastWindow && lastWindow.id) return lastWindow.id;
+  } catch (_) {}
+  try {
+    const allWindows = await chrome.windows.getAll();
+    if (allWindows && allWindows.length > 0) return allWindows[0].id;
+  } catch (_) {}
+  return null;
+}
+
 // 7. Écouteurs de clics et d'actions sur notifications OS
 chrome.notifications?.onClicked.addListener(async (notificationId) => {
   try {
-    const lastWindow = await chrome.windows.getLastFocused({ populate: true });
-    if (lastWindow && lastWindow.id) {
-      await chrome.windows.update(lastWindow.id, { focused: true });
-      await chrome.sidePanel.open({ windowId: lastWindow.id });
+    const windowId = await getSafeTargetWindow();
+    if (windowId) {
+      await chrome.windows.update(windowId, { focused: true }).catch(() => {});
+      await chrome.sidePanel.open({ windowId }).catch(() => {});
     }
     if (notificationId.startsWith('p2p_channel_')) {
       const channelId = notificationId.replace('p2p_channel_', '');
@@ -145,10 +180,10 @@ chrome.notifications?.onButtonClicked.addListener(async (notificationId, buttonI
   try {
     if (notificationId.startsWith('call_incoming_')) {
       chrome.notifications.clear(notificationId);
-      const lastWindow = await chrome.windows.getLastFocused({ populate: true });
-      if (lastWindow && lastWindow.id) {
-        await chrome.windows.update(lastWindow.id, { focused: true });
-        await chrome.sidePanel.open({ windowId: lastWindow.id });
+      const windowId = await getSafeTargetWindow();
+      if (windowId) {
+        await chrome.windows.update(windowId, { focused: true }).catch(() => {});
+        await chrome.sidePanel.open({ windowId }).catch(() => {});
       }
       if (buttonIndex === 0) {
         chrome.runtime.sendMessage({ type: 'ACCEPT_CALL' }).catch(() => {});
@@ -159,11 +194,9 @@ chrome.notifications?.onButtonClicked.addListener(async (notificationId, buttonI
   }
 });
 
-// 8. Gestion de l'énergie (chrome.power)
-let activeKeepAwakeCount = 0;
-
-// 9. Écouteur des messages inter-contextes (Sidepanel <-> SW <-> Offscreen)
+// 8. Écouteur des messages inter-contextes (Sidepanel <-> SW <-> Offscreen)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Sécurisation stricte de l'expéditeur interne à l'extension
   if (!sender || sender.id !== chrome.runtime.id) {
     sendResponse({ error: 'UNAUTHORIZED_SENDER' });
     return false;
@@ -207,19 +240,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           break;
         }
 
-        case 'KEEP_AWAKE_ACQUIRE':
-          activeKeepAwakeCount++;
+        case 'KEEP_AWAKE_ACQUIRE': {
+          const { keepAwakeCount = 0 } = await chrome.storage.session.get('keepAwakeCount');
+          const newCount = keepAwakeCount + 1;
+          await chrome.storage.session.set({ keepAwakeCount: newCount });
           if (chrome.power) chrome.power.requestKeepAwake('system');
-          sendResponse({ success: true, count: activeKeepAwakeCount });
+          sendResponse({ success: true, count: newCount });
           break;
+        }
 
-        case 'KEEP_AWAKE_RELEASE':
-          activeKeepAwakeCount = Math.max(0, activeKeepAwakeCount - 1);
-          if (activeKeepAwakeCount === 0 && chrome.power) chrome.power.releaseKeepAwake();
-          sendResponse({ success: true, count: activeKeepAwakeCount });
+        case 'KEEP_AWAKE_RELEASE': {
+          const { keepAwakeCount = 0 } = await chrome.storage.session.get('keepAwakeCount');
+          const newCount = Math.max(0, keepAwakeCount - 1);
+          await chrome.storage.session.set({ keepAwakeCount: newCount });
+          if (newCount === 0 && chrome.power) {
+            chrome.power.releaseKeepAwake();
+          }
+          sendResponse({ success: true, count: newCount });
           break;
+        }
 
         case 'SHOW_NOTIFICATION': {
+          if (!chrome.notifications) {
+            sendResponse({ error: 'NOTIFICATIONS_PERMISSION_REQUIRED' });
+            break;
+          }
           const notifId = message.id || `p2p_notif_${Date.now()}`;
           chrome.notifications.create(notifId, {
             type: 'basic',

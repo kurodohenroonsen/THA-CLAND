@@ -3,11 +3,11 @@
  * Stratégies de Cache Hybrides (SWR + Network-First), Mises à Jour Atomiques & Bypass Signalement WebRTC
  */
 
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const CACHE_PREFIX = 'pmesh-pwa-';
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 
-// Liste exhaustive des assets nécessaires au fonctionnement 100% hors-ligne
+// Liste exhaustive des assets nécessaires au fonctionnement 100% hors-ligne (Pass 4 Hardened 2026)
 const PRECACHE_ASSETS = [
   './',
   './index.html',
@@ -30,6 +30,26 @@ const PRECACHE_ASSETS = [
   './js/core/power-manager.js',
   './js/core/os-interop.js',
   './js/core/title-manager.js',
+  './js/core/i18n.js',
+  './js/core/a11y-announcer.js',
+  './js/core/task-scheduler.js',
+  './js/core/simd-vector-accelerator.js',
+  './js/core/memory-leak-detector.js',
+  './js/core/binary-buffer-pool.js',
+  './js/core/lazy-module-loader.js',
+  './js/core/schema-migration.js',
+  './js/core/did-codec.js',
+  './js/core/did-resolver.js',
+  './js/core/verifiable-credentials.js',
+  './js/core/wire-codec.js',
+  './js/core/sender-keys.js',
+  './js/core/trust-engine.js',
+  './js/core/equivocation-engine.js',
+  './js/core/hybrid-gossip-engine.js',
+  './js/core/ice-manager.js',
+  './js/core/binary-frame-router.js',
+  './js/core/secure-signaling-e2ee.js',
+  './js/core/datachannel-flow-controller.js',
   './js/modules/auth/auth-controller.js',
   './js/modules/chat/chat-controller.js',
   './js/modules/chat/forum-controller.js',
@@ -38,6 +58,11 @@ const PRECACHE_ASSETS = [
   './js/modules/drive/file-chunker.js',
   './js/modules/drive/merkle-tree.js',
   './js/modules/drive/versioning-dag.js',
+  './js/modules/drive/fast-cdc.js',
+  './js/modules/drive/sequential-streamer.js',
+  './js/modules/drive/media-source-streamer.js',
+  './js/modules/drive/safe-thumbnail.js',
+  './js/modules/drive/vfs-engine.js',
   './js/modules/media/call-controller.js',
   './js/modules/media/media-stream.js',
   './js/modules/media/audio-processor.js',
@@ -47,6 +72,9 @@ const PRECACHE_ASSETS = [
   './js/ui/modal.js',
   './js/ui/toast.js',
   './js/ui/visualizer.js',
+  './js/ui/virtual-list-renderer.js',
+  './locales/fr.json',
+  './locales/en.json',
   './css/variables.css',
   './css/base.css',
   './css/layout.css',

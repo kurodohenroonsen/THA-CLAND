@@ -9,6 +9,7 @@ import { dbManager } from '../../core/local-storage.js';
 import { Modal } from '../../ui/modal.js';
 import { Toast } from '../../ui/toast.js';
 import { SanitizerService } from '../../core/sanitizer.js';
+import { EmptyStateService } from '../../ui/empty-state-service.js';
 
 export class ForumController {
   constructor(crdtEngine, cryptoVault) {
@@ -101,15 +102,19 @@ export class ForumController {
     this.threadsContainer.innerHTML = '';
 
     if (filtered.length === 0) {
-      this.threadsContainer.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">📑</div>
-          <p>Aucun sujet dans cette catégorie.</p>
-          <button class="btn btn-primary" id="btn-empty-create-topic">Créer un Sujet</button>
-        </div>
-      `;
-      const btn = this.threadsContainer.querySelector('#btn-empty-create-topic');
-      if (btn) btn.addEventListener('click', () => Modal.open('modal-new-topic'));
+      const emptyState = EmptyStateService.renderForumEmptyState(
+        this.selectedCategory,
+        ({ title, cat, content }) => {
+          const inputTitle = document.getElementById('new-topic-title');
+          const selectCat = document.getElementById('new-topic-category');
+          const inputContent = document.getElementById('new-topic-content');
+          if (inputTitle) inputTitle.value = title;
+          if (selectCat) selectCat.value = cat;
+          if (inputContent) inputContent.value = content;
+          Modal.open('modal-new-topic');
+        }
+      );
+      this.threadsContainer.appendChild(emptyState);
       return;
     }
 

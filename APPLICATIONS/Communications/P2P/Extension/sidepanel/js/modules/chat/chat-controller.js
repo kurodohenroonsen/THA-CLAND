@@ -12,6 +12,8 @@ import { FileChunker } from '../drive/file-chunker.js';
 import { SanitizerService } from '../../core/sanitizer.js';
 import { titleManager } from '../../core/title-manager.js';
 import { DragDropHelper } from '../../core/os-interop.js';
+import { EmptyStateService } from '../../ui/empty-state-service.js';
+import { a11yAnnouncer } from '../../core/a11y-announcer.js';
 
 export class ChatController {
   constructor(crdtEngine, cryptoVault) {
@@ -395,10 +397,10 @@ export class ChatController {
 
   async loadChannelMessages(channelId) {
     if (!this.messagesContainer) return;
+    this.messagesContainer.setAttribute('aria-busy', 'true');
     this.messagesContainer.innerHTML = '<div class="loading-state">Chargement des messages...</div>';
 
-    // Libère les URLs média de la vue précédente (les blocs restent en cache local,
-    // le ré-affichage est donc immédiat sans re-télécharger le réseau).
+    // Libère les URLs média de la vue précédente
     for (const url of this.attachmentUrls.values()) { try { URL.revokeObjectURL(url); } catch (e) { logger.debug('Chat', 'Erreur revokeObjectURL:', e); } }
     this.attachmentUrls.clear();
 
@@ -407,17 +409,29 @@ export class ChatController {
     this.lastRenderedDate = null;
 
     if (messages.length === 0) {
-      this.messagesContainer.innerHTML = `
-        <div class="empty-chat-state">
-          <div class="empty-chat-icon">💬</div>
-          <p>Aucun message dans ce salon.</p>
-          <small>Soyez le premier à engager la conversation !</small>
-        </div>
-      `;
+      this.messagesContainer.removeAttribute('aria-busy');
+      const currentCh = this.channels.find(c => c.id === channelId)?.name || channelId;
+      const emptyState = EmptyStateService.renderChatEmptyState(
+        currentCh,
+        (promptText) => {
+          if (this.inputMsg) {
+            this.inputMsg.value = promptText;
+            this.autoGrowInput();
+            this.inputMsg.focus();
+          }
+        },
+        () => {
+          if (this.fileInput) this.fileInput.click();
+        },
+        this.vault
+      );
+      this.messagesContainer.appendChild(emptyState);
       return;
     }
 
     messages.forEach(msg => this.appendMessageElement(msg));
+    this.messagesContainer.removeAttribute('aria-busy');
+    a11yAnnouncer.announcePolite(`Salon #${channelId} chargé. ${messages.length} message(s).`);
     this.scrollToBottom();
     this.isAtBottom = true;
     this.hideJumpLatest();
@@ -590,9 +604,12 @@ export class ChatController {
     const isSelf = msg.authorPubkey === this.vault.publicKeyHex || msg.authorId === this.vault.peerId;
     const msgEl = document.createElement('div');
     msgEl.className = `chat-bubble-row ${isSelf ? 'is-self' : 'is-remote'}`;
+    msgEl.setAttribute('role', 'article');
 
     const timeStr = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const contentText = msg.text || msg.content || '';
+    const authorDisplay = isSelf ? 'Vous' : (msg.authorName || 'Membre');
+    msgEl.setAttribute('aria-label', `Message de ${authorDisplay} à ${timeStr}`);
 
     const hasText = !!contentText;
     msgEl.innerHTML = `

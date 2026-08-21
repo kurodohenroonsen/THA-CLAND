@@ -8,6 +8,7 @@ import { FileChunker } from './file-chunker.js';
 import { VersioningDAG } from './versioning-dag.js';
 import { DriveTransferManager } from './drive-transfer.js';
 import { Modal } from '../../ui/modal.js';
+import { EmptyStateService } from '../../ui/empty-state-service.js';
 import { CONFIG } from '../../core/config.js';
 import { dbManager } from '../../core/local-storage.js';
 import { SanitizerService } from '../../core/sanitizer.js';
@@ -261,7 +262,7 @@ export class DriveController {
 
       card.querySelector('.btn-folder-delete').addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (confirm(`Voulez-vous supprimer le dossier "${f.name}" ?`)) {
+        if (await Modal.confirm(`Voulez-vous supprimer le dossier "${f.name}" ?`, 'Supprimer le dossier')) {
           await VersioningDAG.deleteFolder(f.path);
           await this.crdt.broadcastDeleteFolder(f.path);
           Toast.info(`Dossier "${f.name}" supprimé.`);
@@ -282,13 +283,12 @@ export class DriveController {
     this.filesListContainer.innerHTML = '';
 
     if (currentFiles.length === 0) {
-      this.filesListContainer.innerHTML = `
-        <div class="empty-state" style="padding: 20px 10px;">
-          <div class="empty-icon">📄</div>
-          <p>Aucun document dans ce dossier.</p>
-          <small>Glissez un document ci-dessus pour le diffuser.</small>
-        </div>
-      `;
+      const emptyState = EmptyStateService.renderDriveEmptyState(
+        this.currentPath,
+        () => { if (this.fileInput) this.fileInput.click(); },
+        () => { this.openCreateFolderModal(); }
+      );
+      this.filesListContainer.appendChild(emptyState);
       return;
     }
 
@@ -390,7 +390,7 @@ export class DriveController {
   }
 
   async handleDeleteFile(file) {
-    if (!confirm(`Supprimer « ${file.fileName} » du Drive partagé pour tout le groupe ?`)) return;
+    if (!await Modal.confirm(`Supprimer « ${file.fileName} » du Drive partagé pour tout le groupe ?`, 'Supprimer du Drive')) return;
     try {
       await this.crdt.broadcastDeleteFile(file.fileId, this.vault.userName);
       Toast.success(`« ${file.fileName} » supprimé.`);

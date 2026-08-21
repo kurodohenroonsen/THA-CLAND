@@ -1,70 +1,183 @@
+/**
+ * modules/drive/file-chunker.js (Version Durcie Pass 4 - 2026)
+ * Découpage FastCDC Haute Performance, Déduplication Binaire,
+ * Merkle Tree RFC 6962, Compression Adaptative & Streaming Zéro OOM.
+ */
+
 import { logger } from '../../core/logger.js';
 import { CONFIG } from '../../core/config.js';
 import { CryptoVault } from '../../core/crypto-vault.js';
 import { dbManager } from '../../core/local-storage.js';
+import { StreamCompressor } from '../../core/stream-compressor.js';
 import { MerkleTree } from './merkle-tree.js';
-
-/**
- * Module de Découpage de Fichiers (Chunking) & Merkle Hashing SHA-256 (RFC 6962)
- * Découpe les fichiers en blocs, calcule les empreintes cryptographiques et gère l'assemblage streaming.
- */
+import { FastCDC } from './fast-cdc.js';
 
 export class FileChunker {
   /**
-   * Traite un fichier brut (File ou Blob) : découpe en chunks et enregistre en local
+   * Cède temporairement le contrôle au thread UI pour éviter tout gel
    */
-  static async processFile(file, onProgress = null) {
-    const CHUNK_SIZE = CONFIG.DRIVE.CHUNK_SIZE || 512 * 1024;
+  static async yieldToUI() {
+    if (typeof globalThis.scheduler?.yield === 'function') {
+      await globalThis.scheduler.yield();
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  /**
+   * Traite un fichier (File ou Blob) avec gestion mémoire streaming O(1)
+   * Compatible fichiers multi-gigaoctets sans saturation du tas V8.
+   */
+  static async processFile(file, onProgress = null, options = {}) {
     const totalSize = file.size;
-    const totalChunks = Math.max(1, Math.ceil(totalSize / CHUNK_SIZE));
+    const minSize = options.minSize || CONFIG.DRIVE?.CDC_MIN_SIZE || 32 * 1024;
+    const avgSize = options.avgSize || CONFIG.DRIVE?.CHUNK_SIZE || 128 * 1024;
+    const maxSize = options.maxSize || CONFIG.DRIVE?.CDC_MAX_SIZE || 512 * 1024;
+    const algorithm = options.algorithm || CONFIG.DRIVE?.CHUNKING_ALGO || 'fastcdc';
+
+    // Pour les petits fichiers (<= 16 Mo), traitement direct en mémoire tampon
+    // Pour les gros fichiers (> 16 Mo), lecture fenêtrée par tranches pour garantir O(1) RAM
+    const WINDOW_SIZE = 8 * 1024 * 1024; // Fenêtre glissante de 8 Mo
+
     const chunksMeta = [];
     const chunkHashes = [];
+    let processedBytes = 0;
+    let chunkIndex = 0;
 
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, totalSize);
-      const slice = file.slice(start, end);
-      const arrayBuffer = await slice.arrayBuffer();
+    let fileOffset = 0;
+    let carryOverBuffer = new Uint8Array(0);
 
-      // Calcul du hash SHA-256 du chunk
-      const hash = await CryptoVault.hashSHA256(arrayBuffer);
-      chunkHashes.push(hash);
+    while (fileOffset < totalSize || carryOverBuffer.length > 0) {
+      const sliceEnd = Math.min(fileOffset + WINDOW_SIZE, totalSize);
+      const fileSliceBlob = file.slice(fileOffset, sliceEnd);
+      const sliceArrayBuffer = await fileSliceBlob.arrayBuffer();
+      const sliceBytes = new Uint8Array(sliceArrayBuffer);
+      fileOffset = sliceEnd;
 
-      // Sauvegarde du chunk binaire dans le stockage local (OPFS / IndexedDB)
-      await dbManager.saveChunk(hash, arrayBuffer);
+      // Concaténation avec le reliquat du tour précédent
+      let activeBuffer;
+      if (carryOverBuffer.length > 0) {
+        activeBuffer = new Uint8Array(carryOverBuffer.length + sliceBytes.length);
+        activeBuffer.set(carryOverBuffer, 0);
+        activeBuffer.set(sliceBytes, carryOverBuffer.length);
+      } else {
+        activeBuffer = sliceBytes;
+      }
 
-      chunksMeta.push({
-        index: i,
-        hash,
-        size: arrayBuffer.byteLength
-      });
+      const isLastWindow = fileOffset >= totalSize;
 
-      if (onProgress) {
-        onProgress(Math.round(((i + 1) / totalChunks) * 100));
+      let slices;
+      if (algorithm === 'fixed') {
+        const fixedSize = CONFIG.DRIVE?.CHUNK_SIZE || 128 * 1024;
+        slices = [];
+        let cur = 0;
+        while (cur < activeBuffer.length) {
+          const len = Math.min(fixedSize, activeBuffer.length - cur);
+          if (!isLastWindow && cur + len === activeBuffer.length && len < fixedSize) {
+            break; // reporter sur la prochaine fenêtre
+          }
+          slices.push({ offset: cur, length: len });
+          cur += len;
+        }
+      } else {
+        slices = FastCDC.chunk(activeBuffer, { minSize, avgSize, maxSize });
+      }
+
+      // Si ce n'est pas la dernière fenêtre, le dernier bloc incomplet est reporté
+      let cutCount = slices.length;
+      if (!isLastWindow && slices.length > 1) {
+        cutCount = slices.length - 1; // On garde le dernier bloc potentiel en report
+      }
+
+      let lastConsumedOffset = 0;
+
+      for (let i = 0; i < cutCount; i++) {
+        const { offset, length } = slices[i];
+        // Vue exacte sur le chunk (Uint8Array)
+        const rawChunkSlice = activeBuffer.subarray(offset, offset + length);
+
+        // ✅ CORRECTION CRITIQUE : Hachage de la vue Uint8Array (et NON rawChunkSlice.buffer)
+        const rawHash = await CryptoVault.hashSHA256(rawChunkSlice);
+        chunkHashes.push(rawHash);
+
+        // Déduplication & Sauvegarde locale résiliente
+        const alreadyExists = await dbManager.hasChunk(rawHash);
+        if (!alreadyExists) {
+          const { payload } = await StreamCompressor.compressAdaptiveBinary(rawChunkSlice);
+          // Payload binaire dédié
+          await dbManager.saveChunk(rawHash, payload.buffer || payload);
+        }
+
+        chunksMeta.push({
+          index: chunkIndex++,
+          hash: rawHash,
+          rawSize: length,
+          size: length,
+          offset: processedBytes
+        });
+
+        processedBytes += length;
+        lastConsumedOffset = offset + length;
+
+        if (onProgress && totalSize > 0) {
+          onProgress(Math.min(100, Math.round((processedBytes / totalSize) * 100)));
+        }
+
+        // Anti-Freeze UI : Yield toutes les 16 itérations
+        if (chunkIndex % 16 === 0) {
+          await FileChunker.yieldToUI();
+        }
+      }
+
+      // Calcul du reliquat restant pour la prochaine itération
+      if (lastConsumedOffset < activeBuffer.length) {
+        carryOverBuffer = activeBuffer.slice(lastConsumedOffset);
+      } else {
+        carryOverBuffer = new Uint8Array(0);
+      }
+
+      if (isLastWindow && carryOverBuffer.length === 0) {
+        break;
       }
     }
 
-    // Calcul de la racine Merkle hiérarchique conforme RFC 6962
+    // Racine Merkle RFC 6962
     const rootMerkleHash = await MerkleTree.computeRoot(chunkHashes);
 
     return {
       fileName: file.name,
       fileSize: file.size,
       mimeType: file.type || 'application/octet-stream',
-      totalChunks,
+      algorithm,
+      totalChunks: chunksMeta.length,
       rootMerkleHash,
       chunks: chunksMeta
     };
   }
 
   /**
-   * Reconstitue un fichier complet sous forme de Blob à partir de ses chunks (petits fichiers)
+   * Récupère et décompresse un bloc unitaire depuis le stockage local
+   */
+  static async getDecompressedChunk(hash) {
+    const rawStoredBuffer = await dbManager.getChunk(hash);
+    if (!rawStoredBuffer) return null;
+
+    const bytes = new Uint8Array(rawStoredBuffer);
+    if (bytes.length > 0 && (bytes[0] === StreamCompressor.MAGIC_RAW || bytes[0] === StreamCompressor.MAGIC_DEFLATE_RAW)) {
+      const decompressed = await StreamCompressor.decompressAdaptiveBinary(bytes);
+      return decompressed.buffer;
+    }
+    return rawStoredBuffer;
+  }
+
+  /**
+   * Reconstitue un fichier complet en mémoire (Blob)
    */
   static async assembleFile(chunksMeta, mimeType = 'application/octet-stream') {
     const buffers = [];
     const sorted = [...chunksMeta].sort((a, b) => a.index - b.index);
     for (const chunk of sorted) {
-      const buffer = await dbManager.getChunk(chunk.hash);
+      const buffer = await FileChunker.getDecompressedChunk(chunk.hash);
       if (!buffer) throw new Error(`Chunk manquant: index ${chunk.index} (${chunk.hash})`);
       buffers.push(buffer);
     }
@@ -72,20 +185,13 @@ export class FileChunker {
   }
 
   /**
-   * Reconstitue un fichier en FLUX vers un fichier temporaire OPFS sans saturer la RAM (gros fichiers > 1 Go)
+   * Reconstitue un fichier en streaming OPFS avec nettoyage déterministe
    */
   static async assembleFileStreaming(chunksMeta, mimeType = 'application/octet-stream', fileName = 'download.bin') {
     const sorted = [...chunksMeta].sort((a, b) => a.index - b.index);
 
-    // Repli mémoire si OPFS indisponible
     if (!dbManager.opfsRoot) {
-      const buffers = [];
-      for (const chunk of sorted) {
-        const buffer = await dbManager.getChunk(chunk.hash);
-        if (!buffer) throw new Error(`Chunk manquant: index ${chunk.index} (${chunk.hash})`);
-        buffers.push(buffer);
-      }
-      return new Blob(buffers, { type: mimeType });
+      return FileChunker.assembleFile(sorted, mimeType);
     }
 
     const tmpName = `assembled_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -94,14 +200,14 @@ export class FileChunker {
 
     try {
       for (const chunk of sorted) {
-        const buffer = await dbManager.getChunk(chunk.hash);
+        const buffer = await FileChunker.getDecompressedChunk(chunk.hash);
         if (!buffer) throw new Error(`Chunk manquant: index ${chunk.index} (${chunk.hash})`);
         await writable.write(buffer);
       }
       await writable.close();
     } catch (e) {
-      try { await writable.abort(); } catch (err) { logger.debug('Drive', 'Erreur abort writable:', err); }
-      try { await dbManager.opfsRoot.removeEntry(tmpName); } catch (err) { logger.debug('Drive', `Erreur suppression tmp OPFS ${tmpName}:`, err); }
+      try { await writable.abort(); } catch {}
+      try { await dbManager.opfsRoot.removeEntry(tmpName); } catch {}
       throw e;
     }
 

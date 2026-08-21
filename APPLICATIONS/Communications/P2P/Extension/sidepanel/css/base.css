@@ -1,5 +1,5 @@
 /**
- * Styles de Base, Typographie, Scrollbars & Animations
+ * Styles de Base, Typographie Fluide, View Transitions & Moteur de Rendu (Pass 4)
  */
 
 * {
@@ -8,14 +8,21 @@
   box-sizing: border-box;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+html {
+  font-size: 16px;
 }
 
 body {
   font-family: var(--font-sans);
+  font-size: var(--font-base);
+  line-height: var(--lh-normal);
+  font-weight: var(--fw-normal);
+  font-synthesis: none;
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  line-height: 1.5;
-  font-size: 13.5px;
   overflow-x: hidden;
   height: 100vh;
   display: flex;
@@ -39,17 +46,44 @@ body.modal-open {
 ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border-radius: var(--radius-full);
+  transition: background var(--transition-fast);
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
 }
 
-/* Typographie */
+/* Typographie & Équilibrage des Lignes */
 h1, h2, h3, h4, h5, h6 {
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
   letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--font-2xl);
+  line-height: var(--lh-tight);
+}
+
+h2 {
+  font-size: var(--font-xl);
+  line-height: var(--lh-tight);
+}
+
+h3 {
+  font-size: var(--font-lg);
+  line-height: var(--lh-snug);
+}
+
+h4 {
+  font-size: var(--font-base);
+  line-height: var(--lh-snug);
+}
+
+p {
+  line-height: var(--lh-normal);
+  text-wrap: pretty;
 }
 
 a {
@@ -63,35 +97,97 @@ a:hover {
   text-decoration: underline;
 }
 
-code {
+code, kbd, samp {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--font-xs);
+  line-height: var(--lh-tight);
   background: rgba(255, 255, 255, 0.08);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
   color: var(--text-highlight);
 }
 
-/* Animations */
-@keyframes slideIn {
+/* Alignement Typographique de Ligne de Base (W3C text-box-trim) */
+@supports (text-box-trim: both) {
+  .btn, .badge, .status-pill, .nav-tab-btn {
+    text-box-trim: both;
+    text-box-edge: cap alphabetic;
+  }
+}
+
+/* ==========================================================================
+   VIEW TRANSITIONS API — STYLING 2025/2026
+   ========================================================================== */
+
+::view-transition-group(root) {
+  animation-duration: var(--duration-normal);
+  animation-timing-function: var(--ease-standard);
+}
+
+::view-transition-old(root) {
+  animation: var(--duration-fast) var(--ease-accelerate) both vt-fade-out;
+}
+
+::view-transition-new(root) {
+  animation: var(--duration-normal) var(--ease-decelerate) both vt-fade-in;
+}
+
+@keyframes vt-fade-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+
+@keyframes vt-fade-in {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: scale(1.015);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: scale(1);
+  }
+}
+
+/* ==========================================================================
+   ANIMATIONS GPU-ACCÉLÉRÉES & MICRO-INTERACTIONS
+   ========================================================================== */
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
   }
 }
 
 @keyframes fadeOut {
   from {
     opacity: 1;
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0);
   }
   to {
     opacity: 0;
-    transform: translateY(-8px);
+    transform: translate3d(0, -6px, 0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 
@@ -113,7 +209,11 @@ code {
 }
 
 .animate-fade-out {
-  animation: fadeOut var(--transition-normal) forwards;
+  animation: fadeOut var(--transition-fast) forwards;
+}
+
+.animate-scale-in {
+  animation: scaleIn var(--transition-spring-snappy) forwards;
 }
 
 /* Utilitaires */
@@ -127,6 +227,13 @@ code {
   text-overflow: ellipsis;
 }
 
+.text-xs { font-size: var(--font-xs) !important; line-height: var(--lh-snug) !important; }
+.text-sm { font-size: var(--font-sm) !important; line-height: var(--lh-snug) !important; }
+.text-base { font-size: var(--font-base) !important; line-height: var(--lh-normal) !important; }
+.text-lg { font-size: var(--font-lg) !important; line-height: var(--lh-snug) !important; }
+.text-xl { font-size: var(--font-xl) !important; line-height: var(--lh-tight) !important; }
+.text-2xl { font-size: var(--font-2xl) !important; line-height: var(--lh-tight) !important; }
+
 /* Accessibilité : Focus Clavier visible (WCAG 2.2) */
 :focus-visible {
   outline: 2px solid var(--accent-cyan) !important;
@@ -134,12 +241,18 @@ code {
   box-shadow: 0 0 10px rgba(6, 182, 212, 0.5) !important;
 }
 
-/* Accessibilité : Respect de prefers-reduced-motion */
+/* Accessibilité : Respect strict de prefers-reduced-motion (WCAG 2.2 AAA) */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }

@@ -1,6 +1,8 @@
 /**
- * Gestionnaire de Notifications Toast Flottantes Accessible (WCAG 2.2 AA)
+ * Gestionnaire de Notifications Toast Flottantes Accessible (WCAG 2.2 AA / ARIA 1.3)
  */
+
+import { a11yAnnouncer } from '../core/a11y-announcer.js';
 
 export class Toast {
   static iconMap = {
@@ -15,32 +17,43 @@ export class Toast {
    */
   static show(message, type = 'info', duration = 3500) {
     let container = document.getElementById('toast-container');
-    if (!container) {
+    if (!container && typeof document !== 'undefined') {
       container = document.createElement('div');
       container.id = 'toast-container';
       container.className = 'toast-container';
-      container.setAttribute('aria-live', 'polite');
-      container.setAttribute('aria-atomic', 'true');
+      container.setAttribute('role', 'region');
+      container.setAttribute('aria-label', 'Notifications éphémères');
       document.body.appendChild(container);
     }
 
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${type} animate-slide-in`;
-    toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    if (container) {
+      const toast = document.createElement('div');
+      toast.className = `toast toast-${type} animate-slide-in`;
+      toast.setAttribute('role', 'status');
 
-    toast.innerHTML = `
-      <span class="toast-icon" aria-hidden="true">${Toast.iconMap[type] || 'ℹ️'}</span>
-      <span class="toast-message">${message}</span>
-    `;
+      toast.innerHTML = `
+        <span class="toast-icon" aria-hidden="true">${Toast.iconMap[type] || 'ℹ️'}</span>
+        <span class="toast-message">${message}</span>
+      `;
 
-    container.appendChild(toast);
+      container.appendChild(toast);
 
-    setTimeout(() => {
-      toast.classList.add('animate-fade-out');
       setTimeout(() => {
-        if (toast.parentNode) toast.remove();
-      }, 300);
-    }, duration);
+        toast.classList.add('animate-fade-out');
+        setTimeout(() => {
+          if (toast.parentNode) toast.remove();
+        }, 300);
+      }, duration);
+    }
+
+    // Annonce vocale synchronisée via la file universelle
+    if (type === 'error') {
+      a11yAnnouncer.announceAssertive(`Erreur : ${message}`);
+    } else if (type === 'warning') {
+      a11yAnnouncer.announcePolite(`Avertissement : ${message}`);
+    } else {
+      a11yAnnouncer.announcePolite(message);
+    }
   }
 
   static success(msg, dur) { Toast.show(msg, 'success', dur); }

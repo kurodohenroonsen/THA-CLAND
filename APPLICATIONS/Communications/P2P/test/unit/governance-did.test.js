@@ -11,6 +11,9 @@ import { CryptoVault } from '../../Extension/sidepanel/js/core/crypto-vault.js';
 const SAMPLE_CODE = 'ALPHA-BRAVO-CHARLIE-DELTA-ECHO-FOXTROT-1234';
 
 describe('🏛️ Gouvernance, DID & Spécification Protocole (Groupe 8 - Pass 2)', () => {
+  before(() => {
+    CryptoVault.PBKDF2_ITERATIONS = 1000;
+  });
   describe('1. Multibase & Multicodec (W3C DID Core 1.0)', () => {
     test('Multibase encode et décode Base58-BTC avec préfixe "z"', () => {
       const data = new Uint8Array([0x00, 0x01, 0x02, 0xff, 0x42]);
@@ -102,7 +105,7 @@ describe('🏛️ Gouvernance, DID & Spécification Protocole (Groupe 8 - Pass 2
       await vaultBob.initializeFromPaperCode(SAMPLE_CODE, 'Bob');
 
       // Échange de clés de diffusion initial
-      const skdmAlice = vaultAlice.senderKeys.getLocalDistributionMessage();
+      const skdmAlice = await vaultAlice.senderKeys.getLocalDistributionMessage();
       await vaultBob.senderKeys.handleInboundSenderKey(skdmAlice);
     });
 

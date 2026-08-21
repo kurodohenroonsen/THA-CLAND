@@ -1,49 +1,37 @@
 /**
  * Design Tokens & Variables CSS - P2P Mesh Workspace
- * Thème Sombre Futuriste & Glassmorphism Épuré
+ * Système Multi-Thèmes Dynamique (Dark / Light / Auto OS / High Contrast)
+ * Conforme WCAG 2.2 AAA (Ratio >= 7:1 sur tous les composants)
+ * Standards W3C CSS Color Module 4/5, Media Queries Level 5 & DTCG Density Scale
  */
 
+/* ==========================================================================
+   1. TOKENS GLOBAUX INDÉPENDANTS DU THÈME (Primitives & Typographie Fluide)
+   ========================================================================== */
 :root {
-  /* Palette de Fonds */
-  --bg-primary: #0a0d14;
-  --bg-secondary: #111726;
-  --bg-tertiary: #1a2238;
-  --bg-glass: rgba(17, 23, 38, 0.75);
-  --bg-glass-card: rgba(26, 34, 56, 0.65);
-  --bg-glass-hover: rgba(36, 48, 78, 0.8);
-  --bg-input: rgba(10, 13, 20, 0.85);
-
-  /* Accents & Dégradés */
-  --accent-cyan: #06b6d4;
-  --accent-violet: #8b5cf6;
-  --accent-pink: #ec4899;
-  --accent-emerald: #10b981;
-  --accent-amber: #f59e0b;
-  --accent-rose: #f43f5e;
-  
-  --grad-primary: linear-gradient(135deg, #06b6d4 0%, #8b5cf6 100%);
-  --grad-surface: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 100%);
-  --grad-glow: radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, rgba(0, 0, 0, 0) 70%);
-
-  /* Typographie & Textes */
+  /* Échelle Typographique : Familles */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', Menlo, Monaco, Consolas, monospace;
-  
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #8fa0b5; /* WCAG 2.2 AA Conforme (>=4.5:1 sur fond sombre) */
-  --text-highlight: #38bdf8;
 
-  /* Bordures & Ombres */
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-focus: rgba(6, 182, 212, 0.5);
-  --border-glow: rgba(139, 92, 246, 0.4);
-  
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 16px 36px rgba(0, 0, 0, 0.5);
-  --shadow-glow: 0 0 20px rgba(6, 182, 212, 0.25);
+  /* Échelle Typographique Fluide à 6 Niveaux (320px -> 1200px) */
+  --font-xs:   clamp(0.6875rem, 0.665rem + 0.114vw, 0.75rem);     /* 11px -> 12px */
+  --font-sm:   clamp(0.75rem, 0.716rem + 0.17vw, 0.8438rem);       /* 12px -> 13.5px */
+  --font-base: clamp(0.8438rem, 0.81rem + 0.17vw, 0.9375rem);      /* 13.5px -> 15px */
+  --font-lg:   clamp(0.9375rem, 0.881rem + 0.284vw, 1.0938rem);    /* 15px -> 17.5px */
+  --font-xl:   clamp(1.125rem, 1.034rem + 0.455vw, 1.375rem);      /* 18px -> 22px */
+  --font-2xl:  clamp(1.375rem, 1.239rem + 0.682vw, 1.75rem);       /* 22px -> 28px */
 
+  /* Hauteurs de Ligne Normalisées (Unitless) */
+  --lh-tight:   1.2;
+  --lh-snug:    1.35;
+  --lh-normal:  1.5;
+  --lh-relaxed: 1.65;
+
+  /* Graisses Typographiques */
+  --fw-normal:   400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
 
   /* Échelle d'Espacement Normalisée (4px / 8px) */
   --space-1: 4px;
@@ -54,17 +42,333 @@
   --space-6: 24px;
   --space-8: 32px;
 
-  /* Rayons & Transitions */
+  /* Rayons de Courbure */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
+  --radius-xl: 24px;
   --radius-full: 9999px;
 
-  --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-slow: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  /* ==========================================================================
+     SYSTÈME MOTION 2025/2026 — TOKENS DE TIMING & PHYSIQUE SPRING PUR CSS
+     ========================================================================== */
+
+  --duration-instant: 50ms;
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-moderate: 350ms;
+  --duration-slow: 500ms;
+
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+  --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Spring Physics CSS Level 2 (linear() sans bibliothèque JS) */
+  --ease-spring: linear(
+    0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849 31.5%,
+    0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%, 1.015 55%, 1.017 63.9%,
+    1.001 83.5%, 1
+  );
+  --ease-spring-snappy: linear(
+    0, 0.009, 0.035 2.1%, 0.141 4.4%, 0.723 12.9%, 0.938 16.7%, 1.017 20.2%,
+    1.049 23.6%, 1.052 27.3%, 1.019 36.4%, 0.997 45%, 1.001 54.8%, 1
+  );
+
+  --transition-fast: var(--duration-fast) var(--ease-standard);
+  --transition-normal: var(--duration-normal) var(--ease-standard);
+  --transition-slow: var(--duration-slow) var(--ease-decelerate);
+  --transition-spring: var(--duration-moderate) var(--ease-spring);
+  --transition-spring-snappy: var(--duration-normal) var(--ease-spring-snappy);
+}
+
+/* ==========================================================================
+   2. TOKENS DE DENSITÉ D'AFFICHAGE (DTCG Standard 2025/2026)
+   ========================================================================== */
+
+/* Mode Standard (Défaut) */
+:root,
+:root[data-density="standard"] {
+  --density-scale: 1;
+  --density-space-xs: 4px;
+  --density-space-sm: 8px;
+  --density-space-md: 12px;
+  --density-space-lg: 16px;
+  --density-space-xl: 20px;
+
+  --density-chat-bubble-pad-y: 8px;
+  --density-chat-bubble-pad-x: 12px;
+  --density-chat-gap: 10px;
+  --density-chat-font-size: var(--font-base);
+  --density-chat-line-height: var(--lh-normal);
+
+  --density-list-item-pad-y: 8px;
+  --density-list-item-pad-x: 10px;
+  --density-list-gap: 8px;
+
+  --density-btn-pad-y: 8px;
+  --density-btn-pad-x: 14px;
+  --density-btn-font-size: var(--font-base);
+  --density-btn-min-height: 34px;
+
+  --density-input-pad-y: 8px;
+  --density-input-pad-x: 12px;
+  --density-input-font-size: var(--font-base);
+
+  --density-card-pad: 14px;
+  --density-avatar-size: 36px;
+  --density-icon-box-size: 36px;
+  --density-touch-target: 32px;
+}
+
+/* Mode Compact : Optimisé pour Sidepanel 320px, flux massifs et triage */
+:root[data-density="compact"] {
+  --density-scale: 0.8;
+  --density-space-xs: 2px;
+  --density-space-sm: 4px;
+  --density-space-md: 8px;
+  --density-space-lg: 10px;
+  --density-space-xl: 14px;
+
+  --density-chat-bubble-pad-y: 4px;
+  --density-chat-bubble-pad-x: 8px;
+  --density-chat-gap: 4px;
+  --density-chat-font-size: var(--font-sm);
+  --density-chat-line-height: var(--lh-snug);
+
+  --density-list-item-pad-y: 5px;
+  --density-list-item-pad-x: 8px;
+  --density-list-gap: 4px;
+
+  --density-btn-pad-y: 5px;
+  --density-btn-pad-x: 10px;
+  --density-btn-font-size: var(--font-sm);
+  --density-btn-min-height: 28px; /* Conforme WCAG 2.2 SC 2.5.8 >= 24px */
+
+  --density-input-pad-y: 5px;
+  --density-input-pad-x: 8px;
+  --density-input-font-size: var(--font-sm);
+
+  --density-card-pad: 8px;
+  --density-avatar-size: 28px;
+  --density-icon-box-size: 28px;
+  --density-touch-target: 26px; /* Conforme WCAG 2.2 SC 2.5.8 >= 24px */
+}
+
+/* Mode Confort : Espacement généreux pour grand écran et lecture détendue */
+:root[data-density="comfort"] {
+  --density-scale: 1.25;
+  --density-space-xs: 6px;
+  --density-space-sm: 12px;
+  --density-space-md: 16px;
+  --density-space-lg: 22px;
+  --density-space-xl: 28px;
+
+  --density-chat-bubble-pad-y: 12px;
+  --density-chat-bubble-pad-x: 16px;
+  --density-chat-gap: 14px;
+  --density-chat-font-size: var(--font-lg);
+  --density-chat-line-height: var(--lh-relaxed);
+
+  --density-list-item-pad-y: 12px;
+  --density-list-item-pad-x: 14px;
+  --density-list-gap: 12px;
+
+  --density-btn-pad-y: 10px;
+  --density-btn-pad-x: 18px;
+  --density-btn-font-size: var(--font-base);
+  --density-btn-min-height: 40px;
+
+  --density-input-pad-y: 10px;
+  --density-input-pad-x: 14px;
+  --density-input-font-size: var(--font-base);
+
+  --density-card-pad: 20px;
+  --density-avatar-size: 44px;
+  --density-icon-box-size: 42px;
+  --density-touch-target: 44px;
+}
+
+/* ==========================================================================
+   3. THÈME SOMBRE (Défaut & Forcé [data-theme="dark"])
+   WCAG 2.2 AAA : Contrastes >= 7.0:1
+   ========================================================================== */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Palette de Fonds */
+  --bg-primary: #080b11;
+  --bg-secondary: #0f1422;
+  --bg-tertiary: #161e31;
+  --bg-glass: rgba(15, 20, 34, 0.75);
+  --bg-glass-card: rgba(22, 30, 49, 0.65);
+  --bg-glass-hover: rgba(30, 42, 68, 0.80);
+  --bg-input: rgba(8, 11, 17, 0.85);
+
+  /* Typographie & Textes (Ratios >= 7:1 AAA) */
+  --text-primary: #ffffff;
+  --text-secondary: #cbd5e1;
+  --text-muted: #a6b4c9;
+  --text-highlight: #7dd3fc;
+
+  /* Accents & Couleurs d'État */
+  --accent-cyan: #06b6d4;
+  --accent-cyan-text: #22d3ee;
+  --accent-violet: #8b5cf6;
+  --accent-pink: #ec4899;
+  --accent-emerald: #10b981;
+  --accent-emerald-text: #34d399;
+  --accent-amber: #f59e0b;
+  --accent-amber-text: #fbbf24;
+  --accent-rose: #f43f5e;
+  --accent-rose-text: #fda4af;
+
+  /* Dégradés & Halos */
+  --grad-primary: linear-gradient(135deg, #06b6d4 0%, #8b5cf6 100%);
+  --grad-surface: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 100%);
+  --grad-glow: radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, rgba(0, 0, 0, 0) 70%);
+
+  /* Bordures & Ombres */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-focus: rgba(6, 182, 212, 0.50);
+  --border-glow: rgba(139, 92, 246, 0.40);
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.30);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.40);
+  --shadow-lg: 0 16px 36px rgba(0, 0, 0, 0.50);
+  --shadow-glow: 0 0 20px rgba(6, 182, 212, 0.25);
 
   /* Accessibilité & Focus Clavier */
-  --focus-ring: 0 0 0 2px rgba(6, 182, 212, 0.6);
+  --focus-ring: 0 0 0 2px rgba(6, 182, 212, 0.60);
   --focus-outline: 2px solid var(--accent-cyan);
+}
+
+/* ==========================================================================
+   4. THÈME CLAIR (Auto OS & Forcé [data-theme="light"])
+   WCAG 2.2 AAA : Tous les contrastes de texte >= 7.0:1
+   ========================================================================== */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+
+    --bg-primary: #ffffff;
+    --bg-secondary: #f1f5f9;
+    --bg-tertiary: #e2e8f0;
+    --bg-glass: rgba(255, 255, 255, 0.85);
+    --bg-glass-card: rgba(255, 255, 255, 0.90);
+    --bg-glass-hover: rgba(226, 232, 240, 0.90);
+    --bg-input: #ffffff;
+
+    --text-primary: #0f172a;
+    --text-secondary: #334155;
+    --text-muted: #334155;
+    --text-highlight: #0c4a6e;
+
+    --accent-cyan: #164e63;
+    --accent-cyan-text: #164e63;
+    --accent-violet: #5b21b6;
+    --accent-pink: #9d174d;
+    --accent-emerald: #064e3b;
+    --accent-emerald-text: #064e3b;
+    --accent-amber: #713f12;
+    --accent-amber-text: #713f12;
+    --accent-rose: #881337;
+    --accent-rose-text: #881337;
+
+    --grad-primary: linear-gradient(135deg, #0e7490 0%, #6d28d9 100%);
+    --grad-surface: linear-gradient(180deg, rgba(0, 0, 0, 0.02) 0%, rgba(0, 0, 0, 0) 100%);
+    --grad-glow: radial-gradient(circle, rgba(91, 33, 182, 0.08) 0%, rgba(255, 255, 255, 0) 70%);
+
+    --border-subtle: rgba(0, 0, 0, 0.12);
+    --border-focus: rgba(22, 78, 99, 0.65);
+    --border-glow: rgba(91, 33, 182, 0.35);
+
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+    --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06);
+    --shadow-glow: 0 0 16px rgba(22, 78, 99, 0.20);
+
+    --focus-ring: 0 0 0 2px rgba(22, 78, 99, 0.70);
+    --focus-outline: 2px solid var(--accent-cyan);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-primary: #ffffff;
+  --bg-secondary: #f1f5f9;
+  --bg-tertiary: #e2e8f0;
+  --bg-glass: rgba(255, 255, 255, 0.85);
+  --bg-glass-card: rgba(255, 255, 255, 0.90);
+  --bg-glass-hover: rgba(226, 232, 240, 0.90);
+  --bg-input: #ffffff;
+
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #334155;
+  --text-highlight: #0c4a6e;
+
+  --accent-cyan: #164e63;
+  --accent-cyan-text: #164e63;
+  --accent-violet: #5b21b6;
+  --accent-pink: #9d174d;
+  --accent-emerald: #064e3b;
+  --accent-emerald-text: #064e3b;
+  --accent-amber: #713f12;
+  --accent-amber-text: #713f12;
+  --accent-rose: #881337;
+  --accent-rose-text: #881337;
+
+  --grad-primary: linear-gradient(135deg, #0e7490 0%, #6d28d9 100%);
+  --grad-surface: linear-gradient(180deg, rgba(0, 0, 0, 0.02) 0%, rgba(0, 0, 0, 0) 100%);
+  --grad-glow: radial-gradient(circle, rgba(91, 33, 182, 0.08) 0%, rgba(255, 255, 255, 0) 70%);
+
+  --border-subtle: rgba(0, 0, 0, 0.12);
+  --border-focus: rgba(22, 78, 99, 0.65);
+  --border-glow: rgba(91, 33, 182, 0.35);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06);
+  --shadow-glow: 0 0 16px rgba(22, 78, 99, 0.20);
+
+  --focus-ring: 0 0 0 2px rgba(22, 78, 99, 0.70);
+  --focus-outline: 2px solid var(--accent-cyan);
+}
+
+/* ==========================================================================
+   5. ADAPTATION HAUT CONTRASTE (prefers-contrast: more)
+   ========================================================================== */
+@media (prefers-contrast: more) {
+  :root,
+  :root[data-theme="dark"] {
+    --bg-primary: #000000;
+    --bg-secondary: #0a0a0a;
+    --bg-tertiary: #141414;
+    --text-primary: #ffffff;
+    --text-secondary: #f8fafc;
+    --text-muted: #e2e8f0;
+    --border-subtle: #ffffff;
+    --border-focus: #38bdf8;
+    --focus-ring: 0 0 0 3px #ffffff;
+    --focus-outline: 3px solid #38bdf8;
+  }
+
+  :root[data-theme="light"],
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg-primary: #ffffff;
+      --bg-secondary: #ffffff;
+      --bg-tertiary: #f1f5f9;
+      --text-primary: #000000;
+      --text-secondary: #0f172a;
+      --text-muted: #1e293b;
+      --border-subtle: #000000;
+      --border-focus: #000000;
+      --focus-ring: 0 0 0 3px #000000;
+      --focus-outline: 3px solid #000000;
+    }
+  }
 }
