@@ -42,16 +42,16 @@ async function runBenchmarks() {
   {
     const vault = new CryptoVault();
     CryptoVault.PBKDF2_ITERATIONS = 1000;
-    await vault.initializeFromPaperCode('BENCH-ALPHA-BRAVO-CHARLIE-DELTA-ECHO-1234', 'BenchUser');
+    await vault.initializeFromPaperCode('ALPHA-BRAVO-CHARLIE-DELTA-ECHO-FOXTROT-1234', 'BenchUser');
 
     const blockSize = 512 * 1024;
     const iterations = 50;
-    const testPayload = crypto.randomBytes(blockSize);
+    const testPayload = new Uint8Array(crypto.randomBytes(blockSize));
     const totalBytes = blockSize * iterations;
 
     const t0 = performance.now();
     for (let i = 0; i < iterations; i++) {
-      const encrypted = await vault.encryptBinary(testPayload.buffer);
+      const encrypted = await vault.encryptBinary(testPayload);
       await vault.decryptBinary(encrypted.iv, encrypted.ciphertext);
     }
     const t1 = performance.now();

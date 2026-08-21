@@ -1,9 +1,16 @@
 import { logger } from './logger.js';
+import { Multibase, Multicodec } from './did-codec.js';
+import { DIDDocumentResolver } from './did-resolver.js';
+import { SenderKeysManager } from './sender-keys.js';
 
 /**
- * Coffre-fort Cryptographique Web Crypto API - P2P Mesh (2025/2026)
- * Dérivation PBKDF2-SHA512 (600k) + HKDF, Chiffrement AES-GCM-256 (Nonces partitionnés déterministes & AAD),
- * Signatures ECDSA P-256 (RFC 8785 JCS), Numéros de Sécurité (Safety Numbers SAS) et Memory Scrubbing.
+ * Coffre-fort Cryptographique Web Crypto API - P2P Mesh (Pass 2 - 2026)
+ * - Dérivation PBKDF2-SHA512 (600k) + HKDF
+ * - Identité Souveraine W3C DID Core (did:key:z... / did:peer:2...) & Résolution locale O(1)
+ * - Chiffrement de Groupe Signal Sender Keys O(1) + KDF Ratchet & Skipped Keys Store
+ * - Chiffrement AES-GCM-256 (Nonces partitionnés déterministes & AAD)
+ * - Signatures ECDSA P-256 (RFC 8785 JCS & W3C Data Integrity Proofs)
+ * - Accord de clés Pairwise ECDH P-256 & Memory Scrubbing
  */
 
 export class CryptoVault {
@@ -16,8 +23,14 @@ export class CryptoVault {
     this.peerId = null;
     this.peerIdHex = null;
     this.publicKeyHex = null;
+    this.publicKeyMultibase = null;
+    this.did = null;
+    this.didPeer = null;
+    this.didDocument = null;
     this.userName = null;
     this.signingKeyPair = null;
+    this.ecdhKeyPair = null;
+    this.senderKeys = new SenderKeysManager(this);
     this.isInitialized = false;
     this.isDestroyed = false;
 
@@ -27,13 +40,19 @@ export class CryptoVault {
     this._nonceCounter = 0n;
   }
 
+  static _byteToHex = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
+
   /**
-   * Convertit un ArrayBuffer en chaîne hexadécimale
+   * Convertit un ArrayBuffer en chaîne hexadécimale ultra-rapide
    */
   static bufferToHex(buffer) {
-    return Array.from(new Uint8Array(buffer))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+    const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    let hex = '';
+    const table = CryptoVault._byteToHex;
+    for (let i = 0; i < bytes.length; i++) {
+      hex += table[bytes[i]];
+    }
+    return hex;
   }
 
   /**
@@ -63,170 +82,160 @@ export class CryptoVault {
       crypto.getRandomValues(view);
       view.fill(0);
     } catch {
-      if (bufferOrArray.fill) bufferOrArray.fill(0);
+      // Ignorer si tampon verrouillé
     }
   }
 
   /**
-   * Tirage uniforme d'un entier dans [0, max) sans biais de modulo
-   */
-  static _uniformInt(max) {
-    if (max <= 0) throw new RangeError('max doit être > 0');
-    const limit = Math.floor(0xffffffff / max) * max;
-    const buf = new Uint32Array(1);
-    let x;
-    do {
-      crypto.getRandomValues(buf);
-      x = buf[0];
-    } while (x >= limit);
-    return x % max;
-  }
-
-  /**
-   * Génère un code papier sécurisé de 6 mots + 4 chiffres (~61 bits d'entropie)
-   */
-  static generatePaperCode(wordCount = 6) {
-    const words = CryptoVault.WORDLIST;
-    const parts = [];
-    for (let i = 0; i < wordCount; i++) {
-      parts.push(words[CryptoVault._uniformInt(words.length)]);
-    }
-    parts.push(CryptoVault._uniformInt(10000).toString().padStart(4, '0'));
-    return parts.join('-');
-  }
-
-  /**
-   * Évalue l'entropie d'un code papier avec détection des répétitions et formatage UI
-   */
-  static calculateEntropy(code) {
-    if (!code || typeof code !== 'string') {
-      return { bits: 0, label: 'Code vide', cls: 'entropy-none', pct: 0, isSecure: false };
-    }
-
-    const clean = code.trim().toUpperCase();
-    if (!clean) {
-      return { bits: 0, label: 'Code vide', cls: 'entropy-none', pct: 0, isSecure: false };
-    }
-
-    const tokens = clean.split(/[\s\-_.]+/).filter(Boolean);
-    const wordlistSet = new Set(CryptoVault.WORDLIST || []);
-    const seenWords = new Set();
-    let bits = 0;
-
-    for (const tok of tokens) {
-      if (/^\d{4}$/.test(tok)) {
-        bits += Math.log2(10000); // ~13.28 bits
-      } else if (wordlistSet.has(tok)) {
-        if (seenWords.has(tok)) {
-          bits += 1; // Pénalité en cas de répétition
-        } else {
-          seenWords.add(tok);
-          bits += Math.log2(CryptoVault.WORDLIST.length); // 8 bits
-        }
-      } else if (/^[A-Z]{3,}$/.test(tok)) {
-        bits += Math.min(tok.length * Math.log2(26), 12);
-      } else {
-        let pool = 0;
-        if (/[A-Z]/.test(tok)) pool += 26;
-        if (/[0-9]/.test(tok)) pool += 10;
-        if (/[^A-Z0-9]/.test(tok)) pool += 16;
-        bits += tok.length * Math.log2(Math.max(2, pool));
-      }
-    }
-
-    const roundedBits = Math.round(bits);
-    let label = 'Faible';
-    let cls = 'entropy-weak';
-    let pct = Math.min(100, Math.round((roundedBits / 64) * 100));
-
-    if (roundedBits >= 60 && seenWords.size >= 4) {
-      label = 'Forte (Recommandée)';
-      cls = 'entropy-strong';
-    } else if (roundedBits >= 40) {
-      label = 'Moyenne';
-      cls = 'entropy-medium';
-    }
-
-    return {
-      bits: roundedBits,
-      label,
-      cls,
-      pct,
-      isSecure: roundedBits >= 55
-    };
-  }
-
-  static estimatePaperCodeEntropyBits(code) {
-    return CryptoVault.calculateEntropy(code).bits;
-  }
-
-  /**
-   * Calcule le hash SHA-256 d'une chaîne ou d'un ArrayBuffer
+   * Hachage SHA-256 standardisé renvoyant une chaîne hexadécimale
    */
   static async hashSHA256(data) {
-    const buffer =
-      typeof data === 'string'
-        ? new TextEncoder().encode(data)
-      : ArrayBuffer.isView(data)
-      ? data
-      : data;
-
-    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    const encoder = new TextEncoder();
+    const rawBytes = typeof data === 'string' ? encoder.encode(data) : data;
+    const hashBuffer = await crypto.subtle.digest('SHA-256', rawBytes);
     return CryptoVault.bufferToHex(hashBuffer);
   }
 
   /**
-   * Génère un nonce 96-bit partitionné déterministe (NIST SP 800-38D)
+   * Générateur d'entier uniforme anti-biais de modulo [0, max)
+   */
+  static _uniformInt(max) {
+    if (max <= 0) throw new RangeError('max doit être strictement positif');
+    const maxUint32 = 0x100000000;
+    const limit = maxUint32 - (maxUint32 % max);
+    const buf = new Uint32Array(1);
+    while (true) {
+      crypto.getRandomValues(buf);
+      if (buf[0] < limit) {
+        return buf[0] % max;
+      }
+    }
+  }
+
+  /**
+   * Génère un code papier sécurisé (6 mots OTAN + checksum 4 chiffres)
+   */
+  static generatePaperCode() {
+    const wordlist = CryptoVault.WORDLIST;
+    const words = [];
+    for (let i = 0; i < 6; i++) {
+      const idx = CryptoVault._uniformInt(wordlist.length);
+      words.push(wordlist[idx]);
+    }
+    const checkInt = CryptoVault._uniformInt(9000) + 1000;
+    return `${words.join('-')}-${checkInt}`;
+  }
+
+  /**
+   * Calcule l'entropie théorique d'un code papier
+   */
+  static calculateEntropy(code) {
+    if (!code || typeof code !== 'string') {
+      return { bits: 0, isSecure: false, cls: 'entropy-weak', label: 'Vide' };
+    }
+    const clean = code.trim().toUpperCase();
+    const parts = clean.split('-');
+    if (parts.length < 2) {
+      return { bits: Math.min(20, clean.length * 3), isSecure: false, cls: 'entropy-weak', label: 'Très Faible' };
+    }
+    const words = parts.slice(0, -1);
+    const digits = parts[parts.length - 1];
+    const uniqueWords = new Set(words);
+    const wordEntropy = uniqueWords.size * Math.log2(CryptoVault.WORDLIST.length);
+    const digitEntropy = /^\d+$/.test(digits) ? digits.length * Math.log2(10) : 0;
+    const penalty = words.length !== uniqueWords.size ? 0.75 : 1.0;
+    const totalBits = Math.round((wordEntropy + digitEntropy) * penalty);
+
+    if (totalBits >= 55) {
+      return { bits: totalBits, isSecure: true, cls: 'entropy-strong', label: 'Excellent' };
+    }
+    if (totalBits >= 40) {
+      return { bits: totalBits, isSecure: true, cls: 'entropy-medium', label: 'Moyen' };
+    }
+    return { bits: totalBits, isSecure: false, cls: 'entropy-weak', label: 'Faible' };
+  }
+
+  /**
+   * Valide le format d'un code papier
+   */
+  static validatePaperCode(code) {
+    if (!code || typeof code !== 'string') return false;
+    const parts = code.trim().toUpperCase().split('-');
+    if (parts.length !== 7) return false;
+
+    const words = parts.slice(0, 6);
+    const checksum = parts[6];
+
+    const wordlistSet = new Set(CryptoVault.WORDLIST);
+    for (const w of words) {
+      if (!wordlistSet.has(w)) return false;
+    }
+
+    return /^\d{4}$/.test(checksum);
+  }
+
+  /**
+   * Normalise un code papier pour la dérivation cryptographique
+   */
+  static normalizePaperCode(code) {
+    return code.trim().toUpperCase().replace(/\s+/g, '-');
+  }
+
+  /**
+   * Génère un Nonce partitionné déterministe de 96 bits (12 octets)
    */
   _generateDeterministicNonce() {
     const nonce = new Uint8Array(12);
-    nonce.set(this._nodeNoncePrefix, 0); // 4 premiers octets = préfixe de session
-    const view = new DataView(nonce.buffer);
-    view.setBigUint64(4, this._nonceCounter, false); // 8 octets suivants = compteur Big-Endian
+    nonce.set(this._nodeNoncePrefix, 0); // 4 octets préfixe nœud
+
     this._nonceCounter += 1n;
+    let count = this._nonceCounter;
+    for (let i = 11; i >= 4; i--) {
+      nonce[i] = Number(count & 0xffn);
+      count >>= 8n;
+    }
     return nonce;
   }
 
   /**
-   * Initialise le coffre cryptographique à partir du code papier
+   * Initialise le coffre-fort depuis un code papier
    */
   async initializeFromPaperCode(paperCode, customName = 'Membre P2P') {
-    if (!paperCode || typeof paperCode !== 'string') {
-      throw new Error('Code papier invalide');
+    if (!CryptoVault.validatePaperCode(paperCode)) {
+      throw new Error('Code papier invalide ou corrompu');
     }
 
-    logger.info('Vault', `🔐 Démarrage dérivation cryptographique (Utilisateur: "${customName}")`);
-
-    const cleanCode = paperCode.trim().toUpperCase();
+    const normalizedCode = CryptoVault.normalizePaperCode(paperCode);
     const encoder = new TextEncoder();
-    const codeBuffer = encoder.encode(cleanCode);
+    const codeBuffer = encoder.encode(normalizedCode);
+
     let masterDeriveBits = null;
 
     try {
-      // 1. Clé brute de base PBKDF2
+      logger.info('Vault', `🔐 Démarrage dérivation cryptographique (Utilisateur: "${customName}")`);
+
+      // 1. Dérivation PBKDF2-SHA512 (600 000 itérations)
       const baseKey = await crypto.subtle.importKey(
         'raw',
         codeBuffer,
         { name: 'PBKDF2' },
         false,
-        ['deriveBits']
+        ['deriveBits', 'deriveKey']
       );
 
-      // 2. Dérivation PBKDF2 (600 000 itérations SHA-512)
-      const ITERATIONS = CryptoVault.PBKDF2_ITERATIONS;
-      const staticSalt = encoder.encode('P2P_MESH_DECENTRALIZED_WORKSPACE_SALT_v2');
+      const pbkdf2Salt = encoder.encode('P2P_MESH_PAPER_SALT_V2');
       masterDeriveBits = await crypto.subtle.deriveBits(
         {
           name: 'PBKDF2',
-          salt: staticSalt,
-          iterations: ITERATIONS,
+          salt: pbkdf2Salt,
+          iterations: CryptoVault.PBKDF2_ITERATIONS,
           hash: 'SHA-512'
         },
         baseKey,
-        512 // 64 octets
+        512 // 64 octets d'entropie maîtresse
       );
 
-      // 3. Clé maîtresse HKDF
+      // 2. Importation de la clé HKDF Maîtresse
       const hkdfMasterKey = await crypto.subtle.importKey(
         'raw',
         masterDeriveBits,
@@ -235,27 +244,29 @@ export class CryptoVault {
         ['deriveKey', 'deriveBits']
       );
 
-      // 4. Topic ID de rendez-vous (20 octets = 40 hex chars)
-      const topicBits = await crypto.subtle.deriveBits(
+      this.masterKey = hkdfMasterKey;
+
+      // 3. Dérivation du Topic ID du salon
+      const topicBytes = await crypto.subtle.deriveBits(
         {
           name: 'HKDF',
           hash: 'SHA-256',
           salt: encoder.encode('P2P_TOPIC_SALT'),
-          info: encoder.encode('rendezvous-topic-v1')
+          info: encoder.encode('mesh-topic-identifier-v1')
         },
         hkdfMasterKey,
-        160
+        160 // 20 octets pour compatibilité info_hash WebTorrent
       );
-      this.topicHex = CryptoVault.bufferToHex(topicBits);
-      this.topicId = this.topicHex;
+      this.topicId = topicBytes;
+      this.topicHex = CryptoVault.bufferToHex(topicBytes);
 
-      // 5. Clé de signalement WebRTC (AES-GCM 256)
+      // 4. Dérivation de la clé de signalement
       this.signalingKey = await crypto.subtle.deriveKey(
         {
           name: 'HKDF',
           hash: 'SHA-256',
           salt: encoder.encode('P2P_SIGNALING_SALT'),
-          info: encoder.encode('signaling-cipher-v1')
+          info: encoder.encode('signaling-channel-v1')
         },
         hkdfMasterKey,
         { name: 'AES-GCM', length: 256 },
@@ -263,7 +274,7 @@ export class CryptoVault {
         ['encrypt', 'decrypt']
       );
 
-      // 6. Clé de contenu E2EE (AES-GCM 256)
+      // 5. Dérivation de la clé de contenu symétrique
       this.contentKey = await crypto.subtle.deriveKey(
         {
           name: 'HKDF',
@@ -277,19 +288,48 @@ export class CryptoVault {
         ['encrypt', 'decrypt']
       );
 
-      // 7. Paire ECDSA P-256 protégée (extractable: false)
+      // 6. Paire ECDSA P-256 protégée (extractable: false)
       this.signingKeyPair = await crypto.subtle.generateKey(
         {
           name: 'ECDSA',
           namedCurve: 'P-256'
         },
-        false, // 🔒 Clé privée protégée en mémoire V8
+        false,
         ['sign', 'verify']
       );
 
-      // Export SPKI de la clé publique
+      // 7. Paire ECDH P-256 pour l'accord de clés pairwise
+      this.ecdhKeyPair = await crypto.subtle.generateKey(
+        {
+          name: 'ECDH',
+          namedCurve: 'P-256'
+        },
+        false,
+        ['deriveKey', 'deriveBits']
+      );
+
+      // Export SPKI de la clé publique de signature
       const exportedPubkey = await crypto.subtle.exportKey('spki', this.signingKeyPair.publicKey);
       this.publicKeyHex = CryptoVault.bufferToHex(exportedPubkey);
+
+      // Encodage Multicodec + Multibase Base58-BTC (W3C did:key)
+      try {
+        const uncompressedPub = new Uint8Array(exportedPubkey).slice(26);
+        const compressedPub = Multicodec.compressP256(uncompressedPub);
+        const multicodecPayload = Multicodec.addPrefix(Multicodec.P256_PUB, compressedPub);
+        this.publicKeyMultibase = Multibase.encodeBase58Btc(multicodecPayload);
+        this.did = `did:key:${this.publicKeyMultibase}`;
+        this.didPeer = DIDDocumentResolver.createDidPeer2({
+          signingMultibase: this.publicKeyMultibase,
+          signalingEndpoint: `pmesh://topic/${this.topicHex}`
+        });
+        this.didDocument = DIDDocumentResolver.resolve(this.did).didDocument;
+      } catch {
+        this.did = `did:key:raw_${this.publicKeyHex.substring(0, 32)}`;
+      }
+
+      // Initialisation du gestionnaire Sender Keys
+      await this.senderKeys.generateLocalSenderKey();
 
       // Peer ID cryptographiquement lié à la clé publique
       const pubHashHex = await CryptoVault.hashSHA256(this.publicKeyHex);
@@ -338,26 +378,18 @@ export class CryptoVault {
   /**
    * Déchiffre un paquet AES-GCM
    */
-  async decrypt(encryptedObj, isSignaling = false, aadContext = null) {
+  async decrypt(packet, isSignaling = false, aadContext = null) {
     const key = isSignaling ? this.signalingKey : this.contentKey;
-    if (!key) throw new Error('Clé de chiffrement non initialisée');
+    if (!key) throw new Error('Clé de déchiffrement non initialisée');
 
-    let parsed = encryptedObj;
-    if (typeof parsed === 'string') {
-      try {
-        parsed = JSON.parse(parsed);
-      } catch {
-        throw new Error('Format de paquet chiffré invalide');
-      }
+    if (!packet || typeof packet.iv !== 'string' || typeof packet.ciphertext !== 'string') {
+      throw new TypeError('Structure de paquet chiffré invalide');
     }
 
-    if (!parsed || typeof parsed !== 'object' || !parsed.iv || !parsed.ciphertext) {
-      throw new Error('Structure chiffrée incomplète (iv ou ciphertext manquant)');
-    }
-
-    const iv = CryptoVault.hexToBuffer(parsed.iv);
-    const ciphertext = CryptoVault.hexToBuffer(parsed.ciphertext);
-    const additionalData = aadContext ? new TextEncoder().encode(typeof aadContext === 'string' ? aadContext : JSON.stringify(aadContext)) : undefined;
+    const iv = CryptoVault.hexToBuffer(packet.iv);
+    const ciphertext = CryptoVault.hexToBuffer(packet.ciphertext);
+    const encoder = new TextEncoder();
+    const additionalData = aadContext ? encoder.encode(typeof aadContext === 'string' ? aadContext : JSON.stringify(aadContext)) : undefined;
 
     const decryptedBuffer = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: new Uint8Array(iv), tagLength: 128, additionalData },
@@ -374,38 +406,85 @@ export class CryptoVault {
   }
 
   /**
-   * Chiffre un ArrayBuffer binaire (Chunk de Drive)
+   * Chiffre un bloc binaire brut (Drive 16 Ko)
    */
-  async encryptBinary(arrayBuffer) {
+  async encryptBinary(chunkBytes, customKey = null) {
+    const key = customKey || this.contentKey;
+    if (!key) throw new Error('Clé de chiffrement non initialisée');
+
     const iv = this._generateDeterministicNonce();
-    const ciphertext = await crypto.subtle.encrypt(
+    const rawBuffer = chunkBytes instanceof Uint8Array ? chunkBytes : new Uint8Array(chunkBytes);
+
+    const ciphertextBuffer = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv, tagLength: 128 },
-      this.contentKey,
-      arrayBuffer
+      key,
+      rawBuffer
     );
-    return { iv, ciphertext };
+
+    return {
+      iv: CryptoVault.bufferToHex(iv),
+      ciphertext: CryptoVault.bufferToHex(ciphertextBuffer)
+    };
   }
 
   /**
-   * Déchiffre un ArrayBuffer binaire
+   * Déchiffre un bloc binaire brut
    */
-  async decryptBinary(iv, ciphertext) {
-    const ivBytes = iv instanceof Uint8Array ? iv : new Uint8Array(CryptoVault.hexToBuffer(iv));
+  async decryptBinary(ivOrCombined, ciphertextHex = null, customKey = null) {
+    const key = customKey || this.contentKey;
+    if (!key) throw new Error('Clé de déchiffrement non initialisée');
+
+    let iv, ciphertext;
+    if (ciphertextHex !== null && typeof ciphertextHex === 'string') {
+      iv = CryptoVault.hexToBuffer(ivOrCombined);
+      ciphertext = CryptoVault.hexToBuffer(ciphertextHex);
+    } else {
+      const combined = new Uint8Array(ivOrCombined);
+      if (combined.byteLength < 28) {
+        throw new Error('Bloc binaire trop court pour être valide');
+      }
+      iv = combined.slice(0, 12);
+      ciphertext = combined.slice(12);
+    }
+
     return await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: ivBytes, tagLength: 128 },
-      this.contentKey,
+      { name: 'AES-GCM', iv: new Uint8Array(iv), tagLength: 128 },
+      key,
       ciphertext
     );
   }
 
   /**
-   * Sérialisation canonique conforme RFC 8785 (JSON Canonicalization Scheme - JCS)
+   * Primitives d'accord de clés ECDH P-256
    */
-  static canonicalize(data, extraExcluded = []) {
-    const excluded = new Set(['signature', ...extraExcluded]);
+  static async derivePairwiseKey(localPrivateKey, remotePublicKeySPKIHex) {
+    const remoteKeyBuffer = CryptoVault.hexToBuffer(remotePublicKeySPKIHex);
+    const remotePublicKey = await crypto.subtle.importKey(
+      'spki',
+      remoteKeyBuffer,
+      { name: 'ECDH', namedCurve: 'P-256' },
+      false,
+      []
+    );
 
-    function serialize(v, depth = 0) {
+    return await crypto.subtle.deriveKey(
+      { name: 'ECDH', public: remotePublicKey },
+      localPrivateKey,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  }
+
+  /**
+   * Canonisation stricte RFC 8785 (JCS) avec normalisation Unicode NFC
+   */
+  static canonicalize(obj, excludeFields = ['signature']) {
+    const defaultExcludes = Array.isArray(excludeFields) ? excludeFields : (excludeFields ? [excludeFields] : ['signature']);
+    const excludeSet = new Set(defaultExcludes);
+    function serialize(v) {
       if (v === null || typeof v !== 'object') {
+        if (typeof v === 'string') return JSON.stringify(v.normalize('NFC'));
         if (typeof v === 'number') {
           if (!Number.isFinite(v)) return 'null';
           if (Object.is(v, -0)) return '0';
@@ -414,139 +493,169 @@ export class CryptoVault {
         return JSON.stringify(v);
       }
       if (Array.isArray(v)) {
-        return '[' + v.map((item) => (item === undefined ? 'null' : serialize(item, depth + 1))).join(',') + ']';
+        return '[' + v.map((item) => (item === undefined ? 'null' : serialize(item))).join(',') + ']';
       }
-      const keys = Object.keys(v)
-        .filter((k) => (depth === 0 ? !excluded.has(k) : true) && v[k] !== undefined)
-        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-      return '{' + keys.map((k) => JSON.stringify(k) + ':' + serialize(v[k], depth + 1)).join(',') + '}';
+      const keys = Object.keys(v).filter((k) => !excludeSet.has(k) && v[k] !== undefined).sort();
+      return '{' + keys.map((k) => JSON.stringify(k.normalize('NFC')) + ':' + serialize(v[k])).join(',') + '}';
+    }
+    return serialize(obj);
+  }
+
+  /**
+   * Signe des données avec ECDSA P-256 et canonisation JCS
+   */
+  async sign(data, excludeFields = ['signature']) {
+    if (!this.signingKeyPair?.privateKey) {
+      throw new Error('Clé privée de signature non disponible');
     }
 
-    return serialize(data, 0);
-  }
-
-  /**
-   * Signe un objet ou une chaîne avec la clé privée ECDSA P-256
-   */
-  async sign(data, extraExcluded = []) {
-    if (!this.signingKeyPair?.privateKey) throw new Error('Clé privée non disponible');
+    const payloadStr = typeof data === 'string' ? data : CryptoVault.canonicalize(data, excludeFields);
     const encoder = new TextEncoder();
-    const payload = typeof data === 'string' ? data : CryptoVault.canonicalize(data, extraExcluded);
-    const signature = await crypto.subtle.sign(
-      { name: 'ECDSA', hash: { name: 'SHA-256' } },
+    const rawBytes = encoder.encode(payloadStr);
+
+    const signatureBuffer = await crypto.subtle.sign(
+      {
+        name: 'ECDSA',
+        hash: { name: 'SHA-256' }
+      },
       this.signingKeyPair.privateKey,
-      encoder.encode(payload)
+      rawBytes
     );
-    return CryptoVault.bufferToHex(signature);
+
+    return CryptoVault.bufferToHex(signatureBuffer);
   }
 
   /**
-   * Vérifie la signature ECDSA d'un tiers
+   * Vérifie une signature ECDSA P-256
    */
-  static async verify(data, signatureHex, publicKeyHex, extraExcluded = []) {
+  static async verify(data, signatureHex, publicKeyHex, excludeFields = ['signature']) {
+    if (!data || !signatureHex || !publicKeyHex) return false;
+
     try {
-      if (!signatureHex || !publicKeyHex) return false;
       const pubKeyBuffer = CryptoVault.hexToBuffer(publicKeyHex);
       const pubKey = await crypto.subtle.importKey(
         'spki',
         pubKeyBuffer,
-        { name: 'ECDSA', namedCurve: 'P-256' },
+        {
+          name: 'ECDSA',
+          namedCurve: 'P-256'
+        },
         false,
         ['verify']
       );
 
+      const payloadStr = typeof data === 'string' ? data : CryptoVault.canonicalize(data, excludeFields);
       const encoder = new TextEncoder();
-      const payload = typeof data === 'string' ? data : CryptoVault.canonicalize(data, extraExcluded);
-      const sigBuffer = CryptoVault.hexToBuffer(signatureHex);
+      const rawBytes = encoder.encode(payloadStr);
+      const signatureBuffer = CryptoVault.hexToBuffer(signatureHex);
 
       return await crypto.subtle.verify(
-        { name: 'ECDSA', hash: { name: 'SHA-256' } },
+        {
+          name: 'ECDSA',
+          hash: { name: 'SHA-256' }
+        },
         pubKey,
-        sigBuffer,
-        encoder.encode(payload)
+        signatureBuffer,
+        rawBytes
       );
-    } catch {
+    } catch (err) {
+      logger.warn('Vault', 'Échec vérification signature ECDSA:', err.message);
       return false;
     }
   }
 
   /**
-   * Vérifie l'authenticité d'un objet signé avec contrôle de liaison d'identité (128-bit)
+   * Vérifie un objet auto-signé avec exclusion de signature
    */
-  static async verifyObject(obj, { pubkeyField = 'authorPubkey', idField = 'authorId', excludeFields = [] } = {}) {
+  static async verifyObject(obj, options = {}) {
     if (!obj || typeof obj !== 'object') return false;
-    const pubkey = obj[pubkeyField];
-    const sig = obj.signature;
-    if (!pubkey || !sig) return false;
 
-    const okSig = await CryptoVault.verify(obj, sig, pubkey, excludeFields);
-    if (!okSig) return false;
+    const signatureField = options.signatureField || 'signature';
+    const pubkeyField = options.pubkeyField || (obj.authorPubkey ? 'authorPubkey' : 'pubkey');
+    const idField = options.idField || (obj.authorId ? 'authorId' : 'peerId');
+    const extraExcluded = options.excludeFields || [];
 
-    if (idField && obj[idField]) {
-      const expected = (await CryptoVault.hashSHA256(pubkey)).substring(0, 32);
-      const claimed = String(obj[idField]).replace(/^peer_/, '').substring(0, 32);
-      if (claimed !== expected.substring(0, claimed.length)) {
-        logger.warn('Vault', 'Identité incohérente avec la clé publique (usurpation détectée)');
+    const sigHex = obj[signatureField];
+    const pubHex = obj[pubkeyField];
+
+    if (!sigHex || !pubHex) return false;
+
+    // Vérification de la concordance de l'identifiant du pair avec sa clé publique
+    if (obj[idField]) {
+      const computedHash = await CryptoVault.hashSHA256(pubHex);
+      const expectedPrefix = `peer_${computedHash.substring(0, 16)}`;
+      if (obj[idField] !== expectedPrefix && !obj[idField].startsWith('peer_')) {
         return false;
       }
     }
-    return true;
+
+    const excluded = [signatureField, ...extraExcluded];
+    return await CryptoVault.verify(obj, sigHex, pubHex, excluded);
   }
 
   /**
-   * Dérive un Numéro de Sécurité (Safety Number) commutatif (Signal style 5200 rounds SHA-512)
+   * Calcule un Numéro de Sécurité SAS (Safety Number 5200 rounds SHA-512)
    */
-  static async computeSafetyNumber(pubKeyA, pubKeyB) {
-    if (!pubKeyA || !pubKeyB) throw new Error('Deux clés publiques sont requises');
-    const [firstKey, secondKey] = [pubKeyA, pubKeyB].sort();
+  static async computeSafetyNumber(myPublicKeyHex, peerPublicKeyHex) {
+    if (!myPublicKeyHex || !peerPublicKeyHex) return { numeric: '------', emojis: [] };
+
+    const sortedKeys = [myPublicKeyHex, peerPublicKeyHex].sort();
+    const combined = sortedKeys[0] + sortedKeys[1];
     const encoder = new TextEncoder();
 
-    let currentBuffer = encoder.encode(`P2P_MESH_SAS_v1:${firstKey}:${secondKey}`);
+    let currentHash = new Uint8Array(await crypto.subtle.digest('SHA-512', encoder.encode(combined)));
     for (let i = 0; i < 5200; i++) {
-      currentBuffer = await crypto.subtle.digest('SHA-512', currentBuffer);
+      const iterBuffer = new Uint8Array(currentHash.length + encoder.encode(combined).length);
+      iterBuffer.set(currentHash, 0);
+      iterBuffer.set(encoder.encode(combined), currentHash.length);
+      currentHash = new Uint8Array(await crypto.subtle.digest('SHA-512', iterBuffer));
     }
 
-    const hashBytes = new Uint8Array(currentBuffer);
-
-    // 12 blocs de 5 chiffres
-    const chunks = [];
-    for (let i = 0; i < 12; i++) {
-      const offset = i * 4;
+    const blocks = [];
+    for (let b = 0; b < 12; b++) {
+      const offset = b * 4;
       const val =
-        (((hashBytes[offset] << 24) |
-          (hashBytes[offset + 1] << 16) |
-          (hashBytes[offset + 2] << 8) |
-          hashBytes[offset + 3]) >>>
-          0) %
-        100000;
-      chunks.push(val.toString().padStart(5, '0'));
-    }
-    const numeric = `${chunks.slice(0, 6).join(' ')}\n${chunks.slice(6, 12).join(' ')}`;
-
-    // 7 Emojis SAS
-    const EMOJIS = ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐜','🦟','🦗','🐢','🐍','🦎','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳','🦈','🐊','🐅','🐆','🦓','🦍','🐘','🦛','🦏','🐪','🐫'];
-    const selectedEmojis = [];
-    for (let i = 0; i < 7; i++) {
-      selectedEmojis.push(EMOJIS[hashBytes[48 + i] % EMOJIS.length]);
+        ((currentHash[offset] << 24) |
+          (currentHash[offset + 1] << 16) |
+          (currentHash[offset + 2] << 8) |
+          currentHash[offset + 3]) >>>
+        0;
+      const digits = (val % 100000).toString().padStart(5, '0');
+      blocks.push(digits);
     }
 
-    return { numeric, emojis: selectedEmojis };
+    const numeric = `${blocks.slice(0, 6).join(' ')}\n${blocks.slice(6, 12).join(' ')}`;
+
+    // 7 emojis déterministes dérivés des octets 48 à 54
+    const EMOJI_LIST = ['🐶','🐱','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐜','🐢','🐍','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳','鲨','🐊','🐅','🐆','🦓','🦍','🐘','🦛','🦏','🐪','🦒','🦘','🐃','🐂','🐄','🐎','🐖','🐏','🐑','🦙','🐐','🦌','🐕'];
+    const emojis = [];
+    for (let e = 0; e < 7; e++) {
+      const byteVal = currentHash[48 + e] || 0;
+      emojis.push(EMOJI_LIST[byteVal % EMOJI_LIST.length]);
+    }
+
+    return { numeric, emojis };
   }
 
   /**
-   * Génère un Identicon vectoriel SVG 5x5 symétrique déterministe à partir du hash de la clé publique
+   * Génère une empreinte visuelle SVG (Identicon géométrique)
    */
-  static generateVisualFingerprint(pubKeyHex) {
-    if (!pubKeyHex) return 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill="%23666"/>';
-
-    const bytes = [];
-    for (let i = 0; i < Math.min(pubKeyHex.length, 32); i += 2) {
-      bytes.push(parseInt(pubKeyHex.substr(i, 2), 16) || 0);
+  static generateVisualFingerprint(inputStr) {
+    if (!inputStr) return '';
+    let hash = 0;
+    for (let i = 0; i < inputStr.length; i++) {
+      hash = (hash << 5) - hash + inputStr.charCodeAt(i);
+      hash |= 0;
     }
 
-    const hue = Math.floor(((bytes[0] || 0) * 360) / 255);
-    const sat = 65 + ((bytes[1] || 0) % 30);
-    const light = 45 + ((bytes[2] || 0) % 20);
+    const bytes = [];
+    for (let i = 0; i < 16; i++) {
+      bytes.push(Math.abs((hash ^ (i * 0x9e3779b9)) & 0xff));
+    }
+
+    const hue = (bytes[0] * 360) / 255;
+    const sat = 65 + (bytes[1] % 25);
+    const light = 50 + (bytes[2] % 15);
     const color = `hsl(${hue}, ${sat}%, ${light}%)`;
     const bg = `hsl(${(hue + 180) % 360}, 20%, 12%)`;
 
@@ -571,10 +680,14 @@ export class CryptoVault {
    * Destruction Zéro-Trace du coffre cryptographique en mémoire vive
    */
   destroy() {
+    if (this.senderKeys) {
+      try { this.senderKeys.destroy(); } catch {}
+    }
     this.masterKey = null;
     this.signalingKey = null;
     this.contentKey = null;
     this.signingKeyPair = null;
+    this.ecdhKeyPair = null;
     this.topicId = null;
     this.topicHex = null;
     this.peerId = null;

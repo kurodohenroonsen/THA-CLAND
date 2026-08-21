@@ -8,7 +8,7 @@ import { CryptoVault } from './crypto-vault.js';
  */
 
 const DB_NAME = 'P2PMeshWorkspaceDB';
-const DB_VERSION = 4; // Montée en v4 pour les index composites et correctifs de schéma
+const DB_VERSION = 5; // Montée en v5 pour la gouvernance décentralisée, WoT et modération
 
 export class LocalStorageManager {
   constructor() {
@@ -131,6 +131,40 @@ export class LocalStorageManager {
             if (!chunkStore.indexNames.contains('timestamp')) {
               chunkStore.createIndex('timestamp', 'timestamp', { unique: false });
             }
+          }
+        }
+
+        // --- V5 : Gouvernance Décentralisée, Web of Trust & Sécurité Byzantine ---
+        if (oldVersion < 5) {
+          if (!db.objectStoreNames.contains('trust_attestations')) {
+            const trustStore = db.createObjectStore('trust_attestations', { keyPath: 'id', autoIncrement: true });
+            trustStore.createIndex('issuerPubkey', 'issuerPubkey', { unique: false });
+            trustStore.createIndex('subjectPubkey', 'subjectPubkey', { unique: false });
+            trustStore.createIndex('expiresAt', 'expiresAt', { unique: false });
+          }
+
+          if (!db.objectStoreNames.contains('trust_revocations')) {
+            const revStore = db.createObjectStore('trust_revocations', { keyPath: 'subjectPubkey' });
+            revStore.createIndex('issuerPubkey', 'issuerPubkey', { unique: false });
+            revStore.createIndex('timestamp', 'timestamp', { unique: false });
+          }
+
+          if (!db.objectStoreNames.contains('banned_peers')) {
+            const banStore = db.createObjectStore('banned_peers', { keyPath: 'pubkey' });
+            banStore.createIndex('bannedAt', 'bannedAt', { unique: false });
+          }
+
+          if (!db.objectStoreNames.contains('moderation_tombstones')) {
+            const modStore = db.createObjectStore('moderation_tombstones', { keyPath: 'targetId' });
+            modStore.createIndex('type', 'type', { unique: false });
+            modStore.createIndex('moderatorPubkey', 'moderatorPubkey', { unique: false });
+            modStore.createIndex('timestamp', 'timestamp', { unique: false });
+          }
+
+          if (!db.objectStoreNames.contains('room_delegations')) {
+            const delStore = db.createObjectStore('room_delegations', { keyPath: 'id' });
+            delStore.createIndex('delegatePubkey', 'delegatePubkey', { unique: false });
+            delStore.createIndex('role', 'role', { unique: false });
           }
         }
       };
