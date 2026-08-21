@@ -585,6 +585,7 @@ export class P2PMeshNetwork {
     pc.ontrack = (event) => {
       const pid = pc._remotePeerId;
       logger.info('P2P Mesh', `🎥 Piste média reçue [Kind: ${event.track.kind}, TrackID: ${event.track.id}] de ${pid}`);
+      this.applyReceiverJitterTarget(pc, CONFIG.MEDIA?.DEFAULT_JITTER_TARGET_MS || 50);
       this.emit('track-received', {
         peerId: pid,
         track: event.track,
@@ -1090,14 +1091,49 @@ export class P2PMeshNetwork {
     return true;
   }
 
-  // --- Gestion des Pistes Média (Audio/Vidéo) & QoS ---
+  // --- Gestion des Pistes Média (Audio/Vidéo), Codecs & QoS (Personas 5.4, 5.5, 5.9) ---
+
+  _configureTransceiverCodecs(transceiver, kind) {
+    if (!transceiver || typeof transceiver.setCodecPreferences !== 'function') return;
+
+    if (kind === 'audio') {
+      const caps = RTCRtpSender.getCapabilities ? RTCRtpSender.getCapabilities('audio') : null;
+      if (!caps || !caps.codecs) return;
+      const opus = caps.codecs.find(c => c.mimeType.toLowerCase() === 'audio/opus');
+      if (opus) {
+        const fmtp = CONFIG.MEDIA?.AUDIO?.OPUS_FMTP || 'minptime=10;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0;maxplaybackrate=48000;maxaveragebitrate=32000;cbr=0';
+        const enhancedOpus = { ...opus, sdpFmtpLine: fmtp };
+        const others = caps.codecs.filter(c => c !== opus);
+        try {
+          transceiver.setCodecPreferences([enhancedOpus, ...others]);
+        } catch (e) {
+          logger.debug('P2P Mesh', 'Avertissement setCodecPreferences audio:', e);
+        }
+      }
+    } else if (kind === 'video') {
+      const caps = RTCRtpSender.getCapabilities ? RTCRtpSender.getCapabilities('video') : null;
+      if (!caps || !caps.codecs) return;
+      const preferredOrder = CONFIG.MEDIA?.VIDEO?.PREFERRED_CODECS || ['video/VP9', 'video/H264', 'video/VP8', 'video/AV1'];
+      const sortedCodecs = caps.codecs.slice().sort((a, b) => {
+        const idxA = preferredOrder.findIndex(m => a.mimeType.toLowerCase() === m.toLowerCase());
+        const idxB = preferredOrder.findIndex(m => b.mimeType.toLowerCase() === m.toLowerCase());
+        return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
+      });
+      try {
+        transceiver.setCodecPreferences(sortedCodecs);
+      } catch (e) {
+        logger.debug('P2P Mesh', 'Avertissement setCodecPreferences vidéo:', e);
+      }
+    }
+  }
 
   async attachLocalMediaStream(stream) {
-    logger.info('P2P Mesh', '🎙️ Injection du MediaStream local avec QoS dans les connexions Mesh...');
+    logger.info('P2P Mesh', '🎙️ Injection du MediaStream local avec codecs optimisés et QoS dans les connexions Mesh...');
     this.localMediaStream = stream;
 
     for (const [peerId, peer] of this.peers) {
       if (peer.connection) {
+        let needsRenegotiation = false;
         for (const track of stream.getTracks()) {
           if (track.kind === 'audio') {
             track.contentHint = 'speech';
@@ -1106,26 +1142,65 @@ export class P2PMeshNetwork {
           }
 
           const transceivers = peer.connection.getTransceivers();
-          const target = transceivers.find(t => t.receiver && t.receiver.track && t.receiver.track.kind === track.kind);
+          const target = transceivers.find(t => t.sender && t.sender.track && t.sender.track.kind === track.kind) ||
+                         transceivers.find(t => !t.sender.track && t.receiver && t.receiver.track && t.receiver.track.kind === track.kind);
+
           if (target && target.sender) {
-            target.sender.replaceTrack(track);
+            this._configureTransceiverCodecs(target, track.kind);
+            await target.sender.replaceTrack(track);
+            if (typeof target.sender.setStreams === 'function') {
+              try { target.sender.setStreams(stream); } catch (e) {}
+            }
             await this._applySenderQoS(target.sender, track.kind);
           } else {
             const senders = peer.connection.getSenders();
             const exists = senders.some(s => s.track && s.track.id === track.id);
             if (!exists) {
               const sender = peer.connection.addTrack(track, stream);
+              if (typeof sender.setStreams === 'function') {
+                try { sender.setStreams(stream); } catch (e) {}
+              }
+              const associatedTransceiver = transceivers.find(t => t.sender === sender);
+              if (associatedTransceiver) {
+                this._configureTransceiverCodecs(associatedTransceiver, track.kind);
+              }
               await this._applySenderQoS(sender, track.kind);
+              needsRenegotiation = true;
             }
           }
         }
 
-        await this.renegotiatePeer(peerId);
+        if (needsRenegotiation) {
+          await this.renegotiatePeer(peerId);
+        }
       }
     }
   }
 
-  async _applySenderQoS(sender, kind) {
+  async replaceVideoTrack(track, hint = 'motion') {
+    if (track) {
+      track.contentHint = hint;
+    }
+    const isScreenShare = hint === 'detail';
+
+    for (const [peerId, peer] of this.peers) {
+      if (!peer.connection) continue;
+      const senders = peer.connection.getSenders();
+      const videoSender = senders.find(s => s.track && s.track.kind === 'video') ||
+        senders.find(s => !s.track && peer.connection.getTransceivers().some(t => t.sender === s));
+
+      if (videoSender) {
+        try {
+          await videoSender.replaceTrack(track);
+          await this._applySenderQoS(videoSender, 'video', isScreenShare);
+        } catch (err) {
+          logger.warn('P2P Mesh', `Erreur replaceVideoTrack pour ${peerId}:`, err);
+        }
+      }
+    }
+  }
+
+  async _applySenderQoS(sender, kind, isScreenShare = false) {
     if (!sender || !sender.getParameters) return;
     try {
       const params = sender.getParameters();
@@ -1136,12 +1211,19 @@ export class P2PMeshNetwork {
       if (kind === 'audio') {
         params.encodings[0].priority = 'high';
         params.encodings[0].networkPriority = 'high';
-        params.encodings[0].dtx = true;
-        params.encodings[0].maxBitrate = 48000; // 48 kbps max Opus voix
+        params.encodings[0].maxBitrate = CONFIG.MEDIA?.AUDIO?.MAX_BITRATE || 32000;
       } else if (kind === 'video') {
-        params.encodings[0].priority = 'low';
-        params.encodings[0].networkPriority = 'medium';
-        params.degradationPreference = 'maintain-framerate';
+        if (isScreenShare) {
+          params.encodings[0].priority = 'medium';
+          params.encodings[0].networkPriority = 'medium';
+          params.degradationPreference = 'maintain-resolution';
+          params.encodings[0].scaleResolutionDownBy = 1.0;
+          params.encodings[0].maxFramerate = 15;
+        } else {
+          params.encodings[0].priority = 'low';
+          params.encodings[0].networkPriority = 'medium';
+          params.degradationPreference = 'maintain-framerate';
+        }
       }
 
       await sender.setParameters(params);
@@ -1150,14 +1232,9 @@ export class P2PMeshNetwork {
     }
   }
 
-  async applyVideoBitrate(peerId, rttMs) {
+  async applyVideoBitrate(peerId, effectiveRttMs, isScreenShare = false) {
     const peer = this.peers.get(peerId);
     if (!peer || !peer.connection) return;
-
-    let target = CONFIG.VIDEO_BITRATE.LADDER[CONFIG.VIDEO_BITRATE.LADDER.length - 1][1];
-    for (const [maxRtt, bitrate] of CONFIG.VIDEO_BITRATE.LADDER) {
-      if (rttMs <= maxRtt) { target = bitrate; break; }
-    }
 
     const sender = peer.connection.getSenders().find(s => s.track && s.track.kind === 'video');
     if (!sender || !sender.getParameters) return;
@@ -1165,12 +1242,63 @@ export class P2PMeshNetwork {
     try {
       const params = sender.getParameters();
       if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-      if (params.encodings[0].maxBitrate !== target) {
-        params.encodings[0].maxBitrate = target;
-        await sender.setParameters(params);
-        logger.info('P2P Mesh', `🎚️ Bitrate vidéo vers ${peerId} ajusté à ${Math.round(target / 1000)} kbps (RTT ${rttMs} ms)`);
+
+      if (isScreenShare) {
+        const screenCfg = CONFIG.VIDEO_BITRATE?.SCREEN_SHARE || {};
+        params.encodings[0].maxBitrate = screenCfg.maxBitrate || 1800000;
+        params.encodings[0].scaleResolutionDownBy = 1.0;
+        params.encodings[0].maxFramerate = screenCfg.maxFramerate || 15;
+        params.degradationPreference = 'maintain-resolution';
+      } else {
+        // Quota d'upload partagé par pair (Mesh Uplink Budgeting)
+        const activeVideoPeers = Array.from(this.peers.values()).filter(p =>
+          p.connection && p.connection.getSenders().some(s => s.track && s.track.kind === 'video')
+        ).length || 1;
+
+        const totalUplinkCap = CONFIG.VIDEO_BITRATE?.TOTAL_UPLINK_CAP_BPS || 3500000;
+        const perPeerCap = Math.floor(totalUplinkCap / activeVideoPeers);
+
+        let step = CONFIG.VIDEO_BITRATE.LADDER[CONFIG.VIDEO_BITRATE.LADDER.length - 1];
+        for (const candidate of CONFIG.VIDEO_BITRATE.LADDER) {
+          if (effectiveRttMs <= candidate.maxRtt) {
+            step = candidate;
+            break;
+          }
+        }
+
+        const targetBitrate = Math.min(step.maxBitrate, perPeerCap);
+        params.encodings[0].maxBitrate = targetBitrate;
+        params.encodings[0].scaleResolutionDownBy = step.scaleResolutionDownBy || 1.0;
+        params.encodings[0].maxFramerate = step.maxFramerate || 30;
+        params.degradationPreference = 'maintain-framerate';
       }
-    } catch (e) {}
+
+      await sender.setParameters(params);
+    } catch (e) {
+      logger.debug('P2P Mesh', 'Avertissement setParameters adaptatif:', e.message);
+    }
+  }
+
+  applyReceiverJitterTarget(pc, targetMs = 50) {
+    if (!pc || typeof pc.getReceivers !== 'function') return;
+    pc.getReceivers().forEach(receiver => {
+      if ('jitterBufferTarget' in receiver) {
+        receiver.jitterBufferTarget = targetMs;
+      } else if ('playoutDelayHint' in receiver) {
+        receiver.playoutDelayHint = targetMs / 1000;
+      }
+    });
+  }
+
+  resyncPeerJitterBuffers(pc, offsetMs) {
+    if (!pc || typeof pc.getReceivers !== 'function') return;
+    const baseTarget = CONFIG.MEDIA?.DEFAULT_JITTER_TARGET_MS || 50;
+    // Si dérive A/V, applique temporairement un léger ajustement
+    const adjustedTarget = Math.max(30, Math.min(180, baseTarget + Math.abs(offsetMs)));
+    this.applyReceiverJitterTarget(pc, adjustedTarget);
+    setTimeout(() => {
+      this.applyReceiverJitterTarget(pc, baseTarget);
+    }, 4000);
   }
 
   removeLocalMediaStream() {
@@ -1192,11 +1320,16 @@ export class P2PMeshNetwork {
     for (const [peerId, peer] of this.peers) {
       if (!peer.connection) continue;
       let changed = false;
-      peer.connection.getSenders().forEach(sender => {
-        if (sender.track && sender.track.kind === 'video') {
-          try { sender.replaceTrack(null); changed = true; } catch (e) {}
+      const transceivers = peer.connection.getTransceivers ? peer.connection.getTransceivers() : [];
+      for (const t of transceivers) {
+        if (t.sender && t.sender.track && t.sender.track.kind === 'video') {
+          try {
+            await t.sender.replaceTrack(null);
+            t.direction = t.receiver && t.receiver.track ? 'recvonly' : 'inactive';
+            changed = true;
+          } catch (e) {}
         }
-      });
+      }
       if (changed) {
         try { await this.renegotiatePeer(peerId); } catch (e) {}
       }

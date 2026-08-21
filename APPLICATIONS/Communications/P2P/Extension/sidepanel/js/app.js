@@ -400,9 +400,40 @@ class P2PApp {
         }
       }
 
+      // Périphériques Audio & Vidéo (Persona 5.6)
+      if (this.callController && this.callController.mediaManager) {
+        const devices = await this.callController.mediaManager.getAvailableDevices();
+        this.callController.updateDeviceSelectors(devices);
+      }
+
       await this.refreshStorageUI();
       Modal.open('modal-settings');
     };
+
+    const btnTestSpeaker = document.getElementById('btn-test-audio-output');
+    const selectSpeaker = document.getElementById('select-audio-output');
+    if (btnTestSpeaker && selectSpeaker && this.callController) {
+      btnTestSpeaker.addEventListener('click', () => {
+        this.callController.playSpeakerTestTone(selectSpeaker.value);
+      });
+      selectSpeaker.addEventListener('change', () => {
+        this.callController.setAudioOutputSink(selectSpeaker.value);
+      });
+    }
+
+    const selectMic = document.getElementById('select-audio-input');
+    if (selectMic && this.callController) {
+      selectMic.addEventListener('change', () => {
+        this.callController.mediaManager.selectedAudioInputId = selectMic.value;
+      });
+    }
+
+    const selectCam = document.getElementById('select-video-input');
+    if (selectCam && this.callController) {
+      selectCam.addEventListener('change', () => {
+        this.callController.mediaManager.selectedVideoInputId = selectCam.value;
+      });
+    }
 
     if (gear) gear.addEventListener('click', openSettings);
 

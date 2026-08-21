@@ -89,15 +89,37 @@ export const CONFIG = {
     MAX_BINARY_SLICES: 512                        // Nombre max de tranches par bloc binaire
   },
 
-  // Adaptation dynamique du bitrate vidéo selon la latence RTT mesurée
+  // Configuration des Codecs et Médias WebRTC 2025/2026 (Personas 5.4 & 5.9)
+  MEDIA: {
+    AUDIO: {
+      OPUS_FMTP: 'minptime=10;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0;maxplaybackrate=48000;maxaveragebitrate=32000;cbr=0',
+      MAX_BITRATE: 32000,
+      SAMPLE_RATE: 48000
+    },
+    VIDEO: {
+      PREFERRED_CODECS: ['video/VP9', 'video/H264', 'video/VP8', 'video/AV1'],
+      H264_PROFILE_LEVEL: '42e01f;packetization-mode=1'
+    },
+    DEFAULT_JITTER_TARGET_MS: 50
+  },
+
+  // Adaptation multidimensionnelle vidéo selon latence RTT et pertes RTP (Personas 5.4 & 4.10)
   VIDEO_BITRATE: {
+    TOTAL_UPLINK_CAP_BPS: 3500000, // Plafond upload global partagé entre les N-1 pairs (3.5 Mbps)
     LADDER: [
-      [80, 2500000],   // RTT < 80 ms  -> 2.5 Mbps (HD)
-      [160, 1200000],  // RTT < 160 ms -> 1.2 Mbps
-      [280, 600000],   // RTT < 280 ms -> 600 kbps
-      [Infinity, 300000] // au-delà     -> 300 kbps (fluidité préservée)
+      { maxRtt: 80,  maxBitrate: 2200000, scaleResolutionDownBy: 1.0, maxFramerate: 30 },
+      { maxRtt: 160, maxBitrate: 1100000, scaleResolutionDownBy: 1.0, maxFramerate: 25 },
+      { maxRtt: 260, maxBitrate: 550000,  scaleResolutionDownBy: 1.5, maxFramerate: 20 },
+      { maxRtt: 400, maxBitrate: 300000,  scaleResolutionDownBy: 2.0, maxFramerate: 15 },
+      { maxRtt: Infinity, maxBitrate: 160000, scaleResolutionDownBy: 3.0, maxFramerate: 12 }
     ],
-    ADAPT_INTERVAL: 2000 // Évaluation toutes les 2 secondes
+    SCREEN_SHARE: {
+      maxBitrate: 1800000,
+      scaleResolutionDownBy: 1.0,
+      maxFramerate: 15,
+      degradationPreference: 'maintain-resolution'
+    },
+    ADAPT_INTERVAL: 2000
   },
 
   // Intervalles de temps (en millisecondes)

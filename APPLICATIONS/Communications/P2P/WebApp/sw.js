@@ -3,7 +3,7 @@
  * Cache complet pour fonctionnement 100% hors-ligne & modules ES6
  */
 
-const CACHE_NAME = 'pmesh-pwa-v4';
+const CACHE_NAME = 'pmesh-pwa-v5';
 
 const PRECACHE_ASSETS = [
   './',
@@ -36,6 +36,8 @@ const PRECACHE_ASSETS = [
   './js/modules/media/media-stream.js',
   './js/modules/media/audio-processor.js',
   './js/modules/media/audio-visualizer.js',
+  './js/modules/media/vad-worklet-processor.js',
+  './js/modules/media/spatial-audio.js',
   './js/ui/modal.js',
   './js/ui/toast.js',
   './js/ui/visualizer.js',

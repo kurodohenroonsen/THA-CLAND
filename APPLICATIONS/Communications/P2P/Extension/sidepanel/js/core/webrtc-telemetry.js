@@ -145,7 +145,16 @@ export class WebRTCTelemetryEngine {
       prevReportMap.set(videoInbound.id, videoInbound);
     }
 
-    // 4. Calcul Score QoS eMOS
+    // 4. Calcul de la Synchronisation A/V & Lip-Sync (Persona 5.9 ITU-R BT.1359-1)
+    let avSyncOffsetMs = null;
+    if (audioInbound?.estimatedPlayoutTimestamp && videoInbound?.estimatedPlayoutTimestamp) {
+      avSyncOffsetMs = Math.round(audioInbound.estimatedPlayoutTimestamp - videoInbound.estimatedPlayoutTimestamp);
+      if (Math.abs(avSyncOffsetMs) > 80) {
+        this.emit('av-desync-detected', { peerId, offsetMs: avSyncOffsetMs });
+      }
+    }
+
+    // 5. Calcul Score QoS eMOS
     const effectiveRtt = rttMs !== null ? rttMs : 30;
     const effectiveJitter = Math.max(audioMetrics.jitterMs, videoMetrics.jitterMs);
     const effectiveLoss = Math.max(audioMetrics.lossPct, videoMetrics.lossPct);
@@ -158,6 +167,7 @@ export class WebRTCTelemetryEngine {
     return {
       timestamp: now,
       rttMs: effectiveRtt,
+      avSyncOffsetMs,
       availableOutgoingBitrate,
       qualityLimitationReason: videoOutbound?.qualityLimitationReason || 'none',
       audio: audioMetrics,
