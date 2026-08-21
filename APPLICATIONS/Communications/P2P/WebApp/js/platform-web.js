@@ -68,7 +68,12 @@
     },
     tabs: {
       create: function (opts) {
-        try { window.open((opts && opts.url) || '', '_blank'); } catch (e) {}
+        try {
+          var url = (opts && typeof opts.url === 'string') ? opts.url : '';
+          if (/^https?:\/\//i.test(url)) {
+            window.open(url, '_blank', 'noopener,noreferrer');
+          }
+        } catch (e) {}
       }
     },
     action: {
@@ -94,6 +99,15 @@
       setPanelBehavior: function () { return Promise.resolve(); }
     }
   };
+
+  function deepFreeze(obj) {
+    if (!obj || typeof obj !== 'object') return obj;
+    Object.keys(obj).forEach(function (prop) {
+      if (obj[prop] && typeof obj[prop] === 'object') deepFreeze(obj[prop]);
+    });
+    return Object.freeze(obj);
+  }
+  deepFreeze(window.chrome);
 
   console.log('[Platform] Shim web actif — API chrome.* traduites vers les API navigateur.');
 })();

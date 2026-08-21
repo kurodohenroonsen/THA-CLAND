@@ -11,6 +11,7 @@ const audioElements = new Map();
 
 // Écouteur des messages provenant du Sidepanel ou du Service Worker
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!sender || sender.id !== chrome.runtime.id) return false;
   if (message.target !== 'offscreen') return;
 
   switch (message.type) {

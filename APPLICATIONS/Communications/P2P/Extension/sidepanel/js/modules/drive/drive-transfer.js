@@ -27,11 +27,35 @@ export class DriveTransferManager {
     this.autoReplicatingFiles = new Set(); // fileId
 
     this._activeProbes = new Map(); // fileId -> { seeders:Set, fullSeeders:Set }
+    this.peerReputation = new Map(); // peerId -> { failures: 0, penaltyUntil: 0 }
 
     this.initListeners();
 
     // Purge périodique des réassemblages binaires partiels abandonnés
     this.sliceSweepInterval = setInterval(() => this.pendingChunkSlices.sweep(), 15000);
+  }
+
+  _recordPeerFailure(peerId) {
+    if (!peerId) return;
+    const rep = this.peerReputation.get(peerId) || { failures: 0, penaltyUntil: 0 };
+    rep.failures++;
+    if (rep.failures >= 3) {
+      rep.penaltyUntil = Date.now() + 180000; // 3 minutes de mise à l'écart
+      logger.warn('Drive', `🚫 Pair ${peerId} temporairement mis en quarantaine pour défaillance de blocs.`);
+    }
+    this.peerReputation.set(peerId, rep);
+  }
+
+  _recordPeerSuccess(peerId) {
+    if (!peerId) return;
+    const rep = this.peerReputation.get(peerId) || { failures: 0, penaltyUntil: 0 };
+    rep.failures = Math.max(0, rep.failures - 1);
+    this.peerReputation.set(peerId, rep);
+  }
+
+  _isPeerPenalized(peerId) {
+    const rep = this.peerReputation.get(peerId);
+    return rep && rep.penaltyUntil > Date.now();
   }
 
   /**
@@ -283,6 +307,7 @@ export class DriveTransferManager {
     dl.inFlight.forEach((info, hash) => {
       if (now - info.sentAt > TIMEOUT_CHUNK_MS) {
         logger.debug('Drive', `[Transfer] Timeout chunk ${hash.substring(0, 8)} après ${TIMEOUT_CHUNK_MS}ms -> ré-affectation`);
+        this._recordPeerFailure(info.peerId);
         if (!dl.triedPeers.has(hash)) dl.triedPeers.set(hash, new Set());
         dl.triedPeers.get(hash).add(info.peerId);
         dl.inFlight.delete(hash);
@@ -295,7 +320,8 @@ export class DriveTransferManager {
     dl.missingHashes.forEach((hash) => {
       if (dl.inFlight.has(hash)) return;
       const providers = dl.providers.get(hash) || new Set();
-      const onlineProviders = Array.from(providers).filter((p) => this.mesh.peers.has(p));
+      const onlineProviders = Array.from(providers)
+        .filter((p) => this.mesh.peers.has(p) && !this._isPeerPenalized(p));
       rarityList.push({ hash, providers: onlineProviders, score: onlineProviders.length });
     });
 
@@ -313,8 +339,10 @@ export class DriveTransferManager {
       }
 
       if (!candidate && this.mesh.peers.size > 0) {
-        const allPeers = Array.from(this.mesh.peers.keys());
-        candidate = allPeers[Math.floor(Math.random() * allPeers.length)];
+        const unpenalizedPeers = Array.from(this.mesh.peers.keys()).filter((p) => !this._isPeerPenalized(p));
+        if (unpenalizedPeers.length > 0) {
+          candidate = unpenalizedPeers[Math.floor(Math.random() * unpenalizedPeers.length)];
+        }
       }
 
       if (candidate) {

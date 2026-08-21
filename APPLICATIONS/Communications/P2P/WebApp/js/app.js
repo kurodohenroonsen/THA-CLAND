@@ -16,6 +16,7 @@ import { DriveController } from './modules/drive/drive-controller.js';
 import { CallController } from './modules/media/call-controller.js';
 import { Modal } from './ui/modal.js';
 import { Toast } from './ui/toast.js';
+import { SanitizerService } from './core/sanitizer.js';
 
 class P2PApp {
   constructor() {
@@ -34,7 +35,30 @@ class P2PApp {
   }
 
   async init() {
-    // 0. Installation des gestionnaires d'erreurs globaux
+    // 0. Vérification du contexte sécurisé (HTTPS / localhost requis pour WebCrypto & WebRTC)
+    if (typeof window !== 'undefined' && (!window.isSecureContext || !window.crypto?.subtle)) {
+      console.error('[App] Arrêt critique : Contexte non sécurisé (HTTP). WebCrypto et WebRTC indisponibles.');
+      alert('Contexte non sécurisé : P2P Mesh requiert HTTPS ou localhost pour exécuter les opérations cryptographiques.');
+      return;
+    }
+
+    // Installation des gestionnaires d'évacuation matérielle (Anti-Leak micro/caméra)
+    window.addEventListener('pagehide', () => {
+      if (this.callController && this.callController.isInCall) {
+        try { this.callController.leaveCall(); } catch {}
+      }
+      if (this.mesh) {
+        try { this.mesh.stop(); } catch {}
+      }
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (this.callController && this.callController.isInCall) {
+        try { this.callController.leaveCall(); } catch {}
+      }
+    });
+
+    // Installation des gestionnaires d'erreurs globaux
     logger.installGlobalHandlers();
     logger.info('App', '🌟 Démarrage de P2P Mesh Workspace...');
 
@@ -463,8 +487,12 @@ class P2PApp {
       btnLogout.addEventListener('click', async () => {
         if (!confirm('Se déconnecter et effacer la session locale (le code papier restera nécessaire pour revenir) ?')) return;
         try { await dbManager.delete('settings', 'last_paper_code'); } catch (e) { logger.warn('App', 'Erreur suppression session locale:', e); }
+        try { this.callController && this.callController.isInCall && this.callController.leaveCall(); } catch {}
         try { this.mesh && this.mesh.stop(); } catch (e) { logger.warn('App', 'Erreur arrêt mesh:', e); }
         try { this.presence && this.presence.stop(); } catch (e) { logger.warn('App', 'Erreur arrêt presence:', e); }
+        try { this.crdt && this.crdt.destroy(); } catch {}
+        try { this.vault && this.vault.destroy(); } catch {}
+        logger.clearBuffer();
         Toast.info('Déconnexion…');
         setTimeout(() => location.reload(), 500);
       });
@@ -496,9 +524,7 @@ class P2PApp {
   }
 
   escape(str) {
-    const p = document.createElement('p');
-    p.textContent = str;
-    return p.innerHTML;
+    return SanitizerService.escape(str);
   }
 }
 

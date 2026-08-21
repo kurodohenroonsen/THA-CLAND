@@ -11,6 +11,7 @@ import { Modal } from '../../ui/modal.js';
 import { Toast } from '../../ui/toast.js';
 import { CONFIG } from '../../core/config.js';
 import { dbManager } from '../../core/local-storage.js';
+import { SanitizerService } from '../../core/sanitizer.js';
 
 export class DriveController {
   constructor(crdtEngine, meshNetwork, cryptoVault) {
@@ -540,7 +541,7 @@ export class DriveController {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = commit.fileName;
+      a.download = SanitizerService.sanitizeFileName(commit.fileName);
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -638,8 +639,6 @@ export class DriveController {
   }
 
   escape(str) {
-    const p = document.createElement('p');
-    p.textContent = str;
-    return p.innerHTML;
+    return SanitizerService.escape(str);
   }
 }

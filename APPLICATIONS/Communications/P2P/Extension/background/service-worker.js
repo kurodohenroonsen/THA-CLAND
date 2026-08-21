@@ -67,6 +67,15 @@ async function closeOffscreenDocument() {
 
 // Écouteur des messages inter-contextes (Sidepanel <-> SW <-> Offscreen)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!sender || sender.id !== chrome.runtime.id) {
+    console.warn('[SW Security] Message rejeté : sender.id non autorisé', sender?.id);
+    return false;
+  }
+  if (sender.url && !sender.url.startsWith(chrome.runtime.getURL(''))) {
+    console.warn('[SW Security] Message rejeté : URL émettrice hors périmètre', sender.url);
+    return false;
+  }
+
   (async () => {
     try {
       switch (message.type) {

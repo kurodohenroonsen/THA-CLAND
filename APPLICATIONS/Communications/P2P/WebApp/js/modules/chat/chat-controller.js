@@ -9,6 +9,7 @@ import { dbManager } from '../../core/local-storage.js';
 import { Toast } from '../../ui/toast.js';
 import { Modal } from '../../ui/modal.js';
 import { FileChunker } from '../drive/file-chunker.js';
+import { SanitizerService } from '../../core/sanitizer.js';
 
 export class ChatController {
   constructor(crdtEngine, cryptoVault) {
@@ -116,6 +117,19 @@ export class ChatController {
         const el = this.messagesContainer;
         this.isAtBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < 60;
         if (this.isAtBottom) this.hideJumpLatest();
+      });
+
+      // Délégation sécurisée pour l'ouverture des liens externes
+      this.messagesContainer.addEventListener('click', (e) => {
+        const link = e.target.closest('a.p2p-external-link');
+        if (link && link.href) {
+          e.preventDefault();
+          if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
+            chrome.tabs.create({ url: link.href, active: true });
+          } else {
+            window.open(link.href, '_blank', 'noopener,noreferrer');
+          }
+        }
       });
     }
 
@@ -691,25 +705,11 @@ export class ChatController {
   }
 
   formatMessageText(text) {
-    let formatted = this.escapeHTML(text);
-    
-    // Markdown simplifié : **gras**
-    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-    // Markdown simplifié : *italique*
-    formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
-    // Markdown simplifié : `code`
-    formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
-    
-    // Transforme les liens http(s) en liens cliquables
-    formatted = formatted.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
-    
-    return formatted;
+    return SanitizerService.formatSafeChatMessage(text);
   }
 
   escapeHTML(str) {
-    const p = document.createElement('p');
-    p.textContent = str;
-    return p.innerHTML;
+    return SanitizerService.escape(str);
   }
 
   scrollToBottom(force = false) {

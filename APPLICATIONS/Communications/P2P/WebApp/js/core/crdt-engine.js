@@ -1,14 +1,15 @@
 import { logger } from './logger.js';
 /**
  * Moteur CRDT (Conflict-Free Replicated Data Type) & Réconciliation P2P (2025/2026)
- * Horloges logiques de Lamport, BroadcastChannel inter-onglets, Compression de deltas natifs,
- * et fusion déterministe pour Chat, Forums, Commits, Dossiers et Typing Indicators.
+ * Horloges logiques de Lamport protégées, BroadcastChannel inter-onglets, Compression de flux,
+ * validation cryptographique stricte et fusion déterministe pour Chat, Forums, Commits et Dossiers.
  */
 
 import { dbManager } from './local-storage.js';
 import { CryptoVault } from './crypto-vault.js';
 import { BoundedSet } from './bounded-cache.js';
 import { StreamCompressor } from './stream-compressor.js';
+import { MerkleTree } from '../modules/drive/merkle-tree.js';
 
 export class CRDTEngine {
   constructor(meshNetwork, cryptoVault) {
@@ -31,7 +32,7 @@ export class CRDTEngine {
     // Initialisation asynchrone de l'horloge de Lamport depuis la base locale
     this.initLamportClock().catch(() => {});
 
-    // Anti-entropie périodique : pull d'état auprès d'un petit sous-ensemble aléatoire de pairs
+    // Anti-entropie périodique
     this.antiEntropyMs = 25000;
     this.antiEntropyTimer = setInterval(() => this._runAntiEntropy(), this.antiEntropyMs);
   }
@@ -65,7 +66,7 @@ export class CRDTEngine {
     if (!this.localTabChannel) return;
     this.localTabChannel.onmessage = (event) => {
       const { type, payload, lamport, sourceTabId } = event.data || {};
-      if (sourceTabId === this.tabId) return; // Ignore nos propres messages
+      if (sourceTabId === this.tabId) return;
 
       this.tick(lamport || 0);
 
@@ -252,7 +253,9 @@ export class CRDTEngine {
       await dbManager.saveFileDeletion({
         fileId: message.fileId,
         deletedBy: message.op.authorName || 'inconnu',
-        timestamp: message.op.timestamp || Date.now()
+        timestamp: message.op.timestamp || Date.now(),
+        signature: message.op.signature,
+        authorPubkey: message.op.authorPubkey
       });
       this.emit('drive-file-deleted', { fileId: message.fileId });
       return true;
@@ -261,7 +264,7 @@ export class CRDTEngine {
   }
 
   tick(receivedLamport = 0) {
-    const MAX_DRIFT = 100000;
+    const MAX_DRIFT = 500; // Protection contre l'empoisonnement d'horloge
     const safeReceived =
       typeof receivedLamport === 'number' && Number.isFinite(receivedLamport) && receivedLamport > 0
         ? Math.min(receivedLamport, this.lamportClock + MAX_DRIFT)
@@ -367,7 +370,7 @@ export class CRDTEngine {
     if (Array.isArray(delta.commits)) {
       const accepted = [];
       for (const commit of delta.commits.slice(0, CAP)) {
-        if ((await this._isAuthentic(commit)) && this._isValidCommit(commit)) {
+        if ((await this._isAuthentic(commit)) && (await this._isValidCommit(commit))) {
           await dbManager.saveFileCommit(commit);
           accepted.push(commit);
         }
@@ -386,30 +389,53 @@ export class CRDTEngine {
       this.emit('drive-folder-updated', accepted);
     }
 
+    // Suppressions de fichiers (tombstones) : authentification STRICTE
     if (Array.isArray(delta.deletions)) {
       let changed = false;
       for (const tomb of delta.deletions.slice(0, CAP)) {
-        if (tomb && typeof tomb.fileId === 'string') {
-          await dbManager.saveFileDeletion({
-            fileId: tomb.fileId,
-            deletedBy: tomb.deletedBy || 'inconnu',
-            timestamp: tomb.timestamp || Date.now()
+        if (tomb && typeof tomb.fileId === 'string' && tomb.signature && tomb.authorPubkey) {
+          const isValid = await CryptoVault.verifyObject(tomb, {
+            pubkeyField: 'authorPubkey',
+            idField: 'deletedBy'
           });
-          changed = true;
+          if (isValid) {
+            await dbManager.saveFileDeletion({
+              fileId: tomb.fileId,
+              deletedBy: tomb.deletedBy || tomb.authorName || 'inconnu',
+              timestamp: tomb.timestamp || Date.now(),
+              signature: tomb.signature,
+              authorPubkey: tomb.authorPubkey
+            });
+            changed = true;
+          } else {
+            logger.warn('CRDT', `Tombstone de suppression falsifié rejeté pour fileId: ${tomb.fileId}`);
+          }
         }
       }
       if (changed) this.emit('drive-synced', []);
     }
   }
 
-  _isValidCommit(commit) {
-    return (
-      commit &&
-      typeof commit.commitId === 'string' &&
-      typeof commit.fileId === 'string' &&
-      Array.isArray(commit.chunks) &&
-      commit.chunks.length <= 200000
-    );
+  async _isValidCommit(commit) {
+    if (
+      !commit ||
+      typeof commit.commitId !== 'string' ||
+      typeof commit.fileId !== 'string' ||
+      !Array.isArray(commit.chunks) ||
+      commit.chunks.length > 200000
+    ) {
+      return false;
+    }
+
+    // Validation cryptographique de la racine Merkle RFC 6962
+    if (commit.chunks.length > 0 && commit.rootMerkleHash) {
+      const computedRoot = await MerkleTree.computeRoot(commit.chunks.map((c) => c.hash));
+      if (computedRoot !== commit.rootMerkleHash) {
+        logger.warn('CRDT', `Commit ${commit.commitId} rejeté: racine Merkle invalide`);
+        return false;
+      }
+    }
+    return true;
   }
 
   async _mergeForumThread(incoming) {
@@ -456,10 +482,8 @@ export class CRDTEngine {
     await dbManager.saveMessage(message);
     this._markSeen('msg:' + message.id);
 
-    // Propagation locale inter-onglets immédiate
     this._broadcastLocalTab('LOCAL_CHAT_MSG', message, clock);
 
-    // Diffusion réseau WebRTC
     const broadcastPayload = {
       type: 'CHAT_MSG',
       payload: message,
@@ -596,6 +620,25 @@ export class CRDTEngine {
 
   // --- Gestion du Drive & Versioning DAG ---
 
+  async broadcastDriveCommit(commit) {
+    const clock = this.tick();
+    const signed = { ...commit };
+    signed.authorPubkey = this.vault.publicKeyHex;
+    signed.authorId = this.vault.peerId;
+    signed.signature = await this.vault.sign(signed, ['commitId']);
+
+    await dbManager.saveFileCommit(signed);
+    this._markSeen('cmt:' + signed.commitId);
+
+    this._broadcastLocalTab('LOCAL_DRIVE_COMMIT', signed, clock);
+    await this.mesh.broadcast({
+      type: 'DRIVE_COMMIT_BROADCAST',
+      payload: signed,
+      lamport: clock
+    });
+    return signed;
+  }
+
   async broadcastFolderCreate(folderObj) {
     const clock = this.tick();
     const signed = { ...folderObj };
@@ -656,7 +699,13 @@ export class CRDTEngine {
     };
     op.signature = await this.vault.sign(op);
 
-    await dbManager.saveFileDeletion({ fileId, deletedBy: op.authorName, timestamp: op.timestamp });
+    await dbManager.saveFileDeletion({
+      fileId,
+      deletedBy: op.authorName,
+      timestamp: op.timestamp,
+      signature: op.signature,
+      authorPubkey: op.authorPubkey
+    });
     this._markSeen('fdel:' + fileId + ':' + op.timestamp);
 
     this._broadcastLocalTab('LOCAL_DRIVE_FILE_DELETED', { fileId }, clock);
@@ -669,7 +718,7 @@ export class CRDTEngine {
     if (!payload || !payload.commitId) return false;
     this.tick(lamport || 0);
 
-    if (!(await this._isAuthentic(payload)) || !this._isValidCommit(payload)) return false;
+    if (!(await this._isAuthentic(payload)) || !(await this._isValidCommit(payload))) return false;
 
     await dbManager.saveFileCommit(payload);
     this.emit('drive-commit-received', payload);

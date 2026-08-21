@@ -6,10 +6,12 @@ import { logger } from './logger.js';
 
 import { CONFIG } from './config.js';
 import { BoundedSet, TTLMap } from './bounded-cache.js';
+import { CryptoVault } from './crypto-vault.js';
 
 export class P2PMeshNetwork {
   constructor(cryptoVault) {
     this.vault = cryptoVault;
+    this.signalingPeerId = CryptoVault.bufferToHex(crypto.getRandomValues(new Uint8Array(20)));
     this.peers = new Map(); // peerId -> { id, name, connection, controlChannel, dataChannel, connectedAt, lastSeen, latencyMs, incomingFragments: Map }
     this.trackers = new Map(); // trackerUrl -> WebSocket
     this.nostrRelays = new Map(); // relayUrl -> WebSocket
@@ -212,11 +214,13 @@ export class P2PMeshNetwork {
 
       // Attend que les candidats ICE soient insérés dans la description locale
       const completeOffer = await this.waitForIceGathering(pc);
+      const sanitizedOffer = this._sanitizeAndPadSDP(completeOffer.sdp);
 
       // Chiffre la description SDP réelle avec la clé de signalement E2EE
       const encryptedOffer = await this.vault.encrypt({
         type: completeOffer.type,
-        sdp: completeOffer.sdp
+        sdp: sanitizedOffer.sdp,
+        _pad: sanitizedOffer._pad
       }, true);
 
       this.activeOffers.set(offerId, {
@@ -236,7 +240,7 @@ export class P2PMeshNetwork {
     }
 
     const infoHashHex = this.vault.topicHex.substring(0, 40);
-    const peerIdHex = this.vault.peerIdHex.substring(0, 40);
+    const peerIdHex = this.signalingPeerId;
 
     const announceMsg = {
       action: 'announce',
@@ -251,13 +255,32 @@ export class P2PMeshNetwork {
   }
 
   /**
+   * Nettoie les candidats LAN/host du SDP et applique un rembourrage de bloc uniforme
+   */
+  _sanitizeAndPadSDP(sdp) {
+    let cleaned = sdp || '';
+    if (CONFIG.PRIVACY?.STRIP_HOST_CANDIDATES) {
+      cleaned = cleaned
+        .split('\r\n')
+        .filter((line) => !line.startsWith('a=candidate:') || !line.includes('typ host'))
+        .join('\r\n');
+    }
+    const blockSize = CONFIG.PRIVACY?.SDP_PADDING_BLOCK_SIZE || 2048;
+    const padLength = (blockSize - (cleaned.length % blockSize)) % blockSize;
+    return {
+      sdp: cleaned,
+      _pad: '0'.repeat(padLength)
+    };
+  }
+
+  /**
    * Traite les messages entrants des trackers
    */
   async handleTrackerMessage(data, ws) {
     if (data.action === 'announce') {
       const senderPeerIdHex = data.peer_id ? String(data.peer_id) : '';
 
-      if (senderPeerIdHex === this.vault.peerIdHex) {
+      if (senderPeerIdHex === this.signalingPeerId || senderPeerIdHex === this.vault.peerIdHex) {
         return;
       }
 
@@ -300,15 +323,18 @@ export class P2PMeshNetwork {
           await pc.setLocalDescription(rawAnswer);
 
           const completeAnswer = await this.waitForIceGathering(pc);
+          const sanitizedAnswer = this._sanitizeAndPadSDP(completeAnswer.sdp);
+
           const encryptedAnswer = await this.vault.encrypt({
             type: completeAnswer.type,
-            sdp: completeAnswer.sdp
+            sdp: sanitizedAnswer.sdp,
+            _pad: sanitizedAnswer._pad
           }, true);
 
           const answerMsg = {
             action: 'announce',
             info_hash: this.vault.topicHex.substring(0, 40),
-            peer_id: this.vault.peerIdHex.substring(0, 40),
+            peer_id: this.signalingPeerId,
             to_peer_id: data.peer_id,
             answer: {
               type: 'answer',

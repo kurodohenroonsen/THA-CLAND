@@ -99,9 +99,14 @@ class LoggerService {
     if (typeof arg === 'object') {
       try {
         const copy = Array.isArray(arg) ? [] : {};
+        const SENSITIVE_PATTERNS = [
+          'papercode', 'masterkey', 'secretkey', 'privatekey',
+          'passphrase', 'token', 'keybytes', 'rawkey', 'seed'
+        ];
         for (const [k, v] of Object.entries(arg)) {
-          const lowerK = k.toLowerCase();
-          if (lowerK.includes('papercode') || lowerK.includes('masterkey') || lowerK.includes('secretkey') || lowerK.includes('privatekey')) {
+          const normK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const isSensitive = SENSITIVE_PATTERNS.some(p => normK.includes(p));
+          if (isSensitive) {
             copy[k] = '***REDACTED***';
           } else if (typeof v === 'string') {
             copy[k] = this.sanitize(v);

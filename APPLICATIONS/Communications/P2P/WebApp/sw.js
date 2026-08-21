@@ -3,7 +3,7 @@
  * Cache complet pour fonctionnement 100% hors-ligne & modules ES6
  */
 
-const CACHE_NAME = 'pmesh-pwa-v2';
+const CACHE_NAME = 'pmesh-pwa-v3';
 
 const PRECACHE_ASSETS = [
   './',
@@ -15,6 +15,7 @@ const PRECACHE_ASSETS = [
   './js/app.js',
   './js/core/config.js',
   './js/core/logger.js',
+  './js/core/sanitizer.js',
   './js/core/bounded-cache.js',
   './js/core/stream-compressor.js',
   './js/core/crypto-vault.js',

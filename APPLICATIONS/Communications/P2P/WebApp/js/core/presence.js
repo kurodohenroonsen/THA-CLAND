@@ -1,16 +1,18 @@
 import { logger } from './logger.js';
 /**
- * Gestionnaire de Présence, Télémétrie & Battements de Cœur (Heartbeat) P2P
- * Maintient le statut actif des membres, calcule la latence (RTT) et gère le roster.
+ * Gestionnaire de Présence, Télémétrie & Battements de Cœur (Heartbeat) P2P (2025/2026)
+ * Identicons vectoriels déterministes SVG, Détection d'usurpation / Changement de Clé Publique,
+ * et Heartbeat avec Jitter aléatoire anti-fingerprinting.
  */
 
 import { CONFIG } from './config.js';
+import { CryptoVault } from './crypto-vault.js';
 
 export class PresenceManager {
   constructor(meshNetwork) {
     this.mesh = meshNetwork;
-    this.roster = new Map(); // peerId -> { id, name, pubkey, avatar, latencyMs, lastSeen, isAudioActive, isVideoActive }
-    this.pingInterval = null;
+    this.roster = new Map(); // peerId -> { id, name, pubkey, avatar, latencyMs, lastSeen, isAudioActive, isVideoActive, inCall, isKeyVerified }
+    this.pingTimeout = null;
     this.listeners = [];
 
     this.initListeners();
@@ -22,8 +24,7 @@ export class PresenceManager {
 
   notifyUpdate() {
     const peerList = Array.from(this.roster.values());
-    logger.debug('Presence', `👥 Mise à jour du Roster des membres (${peerList.length} en ligne)`);
-    this.listeners.forEach(cb => cb(peerList));
+    this.listeners.forEach((cb) => cb(peerList));
   }
 
   initListeners() {
@@ -33,12 +34,13 @@ export class PresenceManager {
         id: peer.id,
         name: peer.name || 'Membre P2P',
         pubkey: '',
-        avatar: this.generateAvatar(peer.id),
+        avatar: CryptoVault.generateVisualFingerprint(peer.id),
         latencyMs: 0,
         lastSeen: Date.now(),
         isAudioActive: false,
         isVideoActive: false,
-        inCall: false
+        inCall: false,
+        isKeyVerified: false
       });
       this.notifyUpdate();
     });
@@ -55,22 +57,31 @@ export class PresenceManager {
   }
 
   start() {
-    if (this.pingInterval) clearInterval(this.pingInterval);
-    logger.info('Presence', '💓 Démarrage de la boucle de Heartbeat (5s)...');
-
-    this.pingInterval = setInterval(() => {
-      this.sendHeartbeat();
-      this.checkTimeouts();
-    }, CONFIG.TIMINGS.HEARTBEAT_INTERVAL);
+    if (this.pingTimeout) clearTimeout(this.pingTimeout);
+    logger.info('Presence', '💓 Démarrage de la boucle de Heartbeat avec Jitter anti-analyse...');
+    this.scheduleNextHeartbeat();
   }
 
   stop() {
     logger.info('Presence', '🛑 Arrêt du gestionnaire de présence');
-    if (this.pingInterval) {
-      clearInterval(this.pingInterval);
-      this.pingInterval = null;
+    if (this.pingTimeout) {
+      clearTimeout(this.pingTimeout);
+      this.pingTimeout = null;
     }
     this.roster.clear();
+  }
+
+  scheduleNextHeartbeat() {
+    const baseInterval = CONFIG.TIMINGS?.HEARTBEAT_INTERVAL || 5000;
+    const jitterLimit = CONFIG.PRIVACY?.HEARTBEAT_JITTER_MS || 1500;
+    const jitter = Math.floor(Math.random() * (jitterLimit * 2)) - jitterLimit;
+    const nextDelay = Math.max(2000, baseInterval + jitter);
+
+    this.pingTimeout = setTimeout(() => {
+      this.sendHeartbeat();
+      this.checkTimeouts();
+      this.scheduleNextHeartbeat();
+    }, nextDelay);
   }
 
   sendHeartbeat() {
@@ -85,7 +96,7 @@ export class PresenceManager {
     const now = Date.now();
     this.roster.forEach((peer, peerId) => {
       if (now - peer.lastSeen > CONFIG.TIMINGS.PEER_TIMEOUT) {
-        logger.warn('Presence', `⏰ Timeout pair inactif: ${peerId.substring(0, 10)}... (Dernier contact il y a ${Math.round((now - peer.lastSeen) / 1000)}s)`);
+        logger.warn('Presence', `⏰ Timeout pair inactif: ${peerId.substring(0, 10)}...`);
         this.mesh.removePeer(peerId);
       }
     });
@@ -100,12 +111,13 @@ export class PresenceManager {
         id: peerId,
         name: 'Membre P2P',
         pubkey: '',
-        avatar: this.generateAvatar(peerId),
+        avatar: CryptoVault.generateVisualFingerprint(peerId),
         latencyMs: 0,
         lastSeen: Date.now(),
         isAudioActive: false,
         isVideoActive: false,
-        inCall: false
+        inCall: false,
+        isKeyVerified: false
       };
       this.roster.set(peerId, peer);
     }
@@ -113,19 +125,22 @@ export class PresenceManager {
     peer.lastSeen = Date.now();
 
     switch (msg.type) {
-      case 'PING':
-        this.mesh.sendToPeer(peerId, {
-          type: 'PONG',
-          t: msg.t,
-          replyAt: Date.now()
-        });
+      case 'PING': {
+        const replyDelay = 30 + Math.floor(Math.random() * 70); // 30-100ms anti-fingerprint delay
+        setTimeout(() => {
+          this.mesh.sendToPeer(peerId, {
+            type: 'PONG',
+            t: msg.t,
+            replyAt: Date.now()
+          });
+        }, replyDelay);
         break;
+      }
 
       case 'PONG':
         if (msg.t) {
           const rtt = Math.max(1, Date.now() - msg.t);
           peer.latencyMs = Math.round(rtt / 2);
-          logger.debug('Presence', `⚡ Latence mesurée avec ${peerId.substring(0, 10)}...: ${peer.latencyMs} ms (RTT: ${rtt} ms)`);
           this.notifyUpdate();
         }
         break;
@@ -133,38 +148,37 @@ export class PresenceManager {
       case 'PEER_HELLO':
         logger.info('Presence', `👋 Présentation reçue de ${peerId.substring(0, 10)}...: Nom="${msg.name}"`);
         if (msg.name) peer.name = msg.name;
-        if (msg.pubkey) peer.pubkey = msg.pubkey;
+        
+        // Détection de substitution non autorisée de clé publique (Anti-Spoofing / Anti-MITM)
+        if (msg.pubkey) {
+          if (peer.pubkey && peer.pubkey !== msg.pubkey) {
+            logger.error('Presence', `🚨 ALERTE SÉCURITÉ: Changement inattendu de clé publique pour le pair ${peerId}! Possible tentative d'usurpation MITM.`);
+            peer.isKeyVerified = false;
+            peer.isKeyCompromised = true;
+          } else {
+            peer.pubkey = msg.pubkey;
+            peer.avatar = CryptoVault.generateVisualFingerprint(msg.pubkey);
+            peer.isKeyVerified = true;
+          }
+        }
         this.notifyUpdate();
         break;
 
       case 'MEDIA_SIGNAL':
-        logger.debug('Presence', `🎙️ Statut média de ${peerId.substring(0, 10)}...: EnAppel=${msg.inCall}, Audio=${msg.isAudioActive}, Vidéo=${msg.isVideoActive}`);
-        if (msg.inCall !== undefined) peer.inCall = msg.inCall;
-        if (msg.isAudioActive !== undefined) peer.isAudioActive = msg.isAudioActive;
-        if (msg.isVideoActive !== undefined) peer.isVideoActive = msg.isVideoActive;
-        this.notifyUpdate();
+        if (msg.status) {
+          peer.inCall = !!msg.status.inCall;
+          peer.isAudioActive = !!msg.status.audio;
+          peer.isVideoActive = !!msg.status.video;
+          this.notifyUpdate();
+        }
         break;
     }
   }
 
-  broadcastMediaStatus(inCall, isAudioActive, isVideoActive) {
-    logger.debug('Presence', `📢 Diffusion de notre statut média: EnAppel=${inCall}, Audio=${isAudioActive}, Vidéo=${isVideoActive}`);
+  broadcastMediaStatus(inCall, audio, video, screen = false) {
     this.mesh.broadcast({
       type: 'MEDIA_SIGNAL',
-      inCall,
-      isAudioActive,
-      isVideoActive
+      status: { inCall, audio, video, screen }
     });
-  }
-
-  generateAvatar(seedStr) {
-    let hash = 0;
-    for (let i = 0; i < seedStr.length; i++) {
-      hash = seedStr.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const h1 = Math.abs(hash % 360);
-    const h2 = (h1 + 60) % 360;
-    
-    return `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="hsl(${h1}, 80%, 55%)"/><stop offset="100%" stop-color="hsl(${h2}, 85%, 45%)"/></linearGradient></defs><rect width="64" height="64" rx="32" fill="url(%23g)"/><circle cx="32" cy="24" r="12" fill="rgba(255,255,255,0.85)"/><path d="M12 56 C12 42, 22 38, 32 38 C42 38, 52 42, 52 56 Z" fill="rgba(255,255,255,0.85)"/></svg>`;
   }
 }

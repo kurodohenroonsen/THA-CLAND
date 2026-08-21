@@ -8,6 +8,7 @@ import { CONFIG } from '../../core/config.js';
 import { dbManager } from '../../core/local-storage.js';
 import { Modal } from '../../ui/modal.js';
 import { Toast } from '../../ui/toast.js';
+import { SanitizerService } from '../../core/sanitizer.js';
 
 export class ForumController {
   constructor(crdtEngine, cryptoVault) {
@@ -231,8 +232,6 @@ export class ForumController {
   }
 
   escape(str) {
-    const p = document.createElement('p');
-    p.textContent = str;
-    return p.innerHTML;
+    return SanitizerService.escape(str);
   }
 }
