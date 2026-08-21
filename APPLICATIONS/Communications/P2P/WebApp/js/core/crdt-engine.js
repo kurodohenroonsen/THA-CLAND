@@ -7,7 +7,7 @@ import { logger } from './logger.js';
 
 import { dbManager } from './local-storage.js';
 import { CryptoVault } from './crypto-vault.js';
-import { BoundedSet } from './bounded-cache.js';
+import { BoundedSet, GenerationalSlidingCache, GossipEnvelope } from './bounded-cache.js';
 import { StreamCompressor } from './stream-compressor.js';
 import { MerkleTree } from '../modules/drive/merkle-tree.js';
 
@@ -20,8 +20,17 @@ export class CRDTEngine {
     this.stateVectors = new Map();
     this.listeners = new Map();
 
-    // Réplication complète (gossip multi-sauts) : identifiants de contenus déjà vus
-    this.seenContentIds = new BoundedSet(50000);
+    // Cache glissant multi-générationnel pour la déduplication Gossip anti-boucle
+    this.seenContentIds = new GenerationalSlidingCache({ generationSize: 20000, rotateIntervalMs: 90000 });
+
+    // Vecteur d'état local en mémoire pour anti-entropie O(1) sans scan complet DB
+    this.maxKnownTimestamps = {
+      messages: 0,
+      threads: 0,
+      commits: 0,
+      folders: 0,
+      deletions: 0
+    };
 
     // Initialisation du bus local inter-onglets (sans passer par WebRTC)
     this.localTabChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('pmesh_tab_sync') : null;
@@ -29,7 +38,7 @@ export class CRDTEngine {
 
     this.initListeners();
 
-    // Initialisation asynchrone de l'horloge de Lamport depuis la base locale
+    // Initialisation asynchrone de l'horloge de Lamport et du vecteur d'état
     this.initLamportClock().catch(() => {});
 
     // Anti-entropie périodique
@@ -38,14 +47,16 @@ export class CRDTEngine {
   }
 
   /**
-   * Initialise l'horloge de Lamport à la valeur maximale présente dans la base de données locale
+   * Initialise l'horloge de Lamport et le vecteur d'état depuis la base de données locale
    */
   async initLamportClock() {
     try {
-      const [msgs, threads, commits] = await Promise.all([
+      const [msgs, threads, commits, folders, deletions] = await Promise.all([
         dbManager.getAll('messages'),
         dbManager.getAll('forum_threads'),
-        dbManager.getAll('file_commits')
+        dbManager.getAll('file_commits'),
+        dbManager.getAll('drive_folders'),
+        dbManager.getAll('drive_deletions')
       ]);
       const maxMsg = msgs.reduce((m, x) => Math.max(m, x.lamport || 0), 0);
       const maxThr = threads.reduce((m, x) => Math.max(m, x.lamport || 0), 0);
@@ -53,7 +64,16 @@ export class CRDTEngine {
       const maxFound = Math.max(0, maxMsg, maxThr, maxCmt);
 
       this.lamportClock = Math.max(this.lamportClock, maxFound);
-      logger.info('CRDT', `Horloge de Lamport initialisée à ${this.lamportClock}`);
+
+      this.maxKnownTimestamps = {
+        messages: msgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0),
+        threads: threads.reduce((max, t) => Math.max(max, t.createdAt || 0), 0),
+        commits: commits.reduce((max, c) => Math.max(max, c.timestamp || 0), 0),
+        folders: folders.reduce((max, f) => Math.max(max, f.createdAt || 0), 0),
+        deletions: deletions.reduce((max, d) => Math.max(max, d.timestamp || 0), 0)
+      };
+
+      logger.info('CRDT', `Horloge Lamport: ${this.lamportClock}, Max Msg: ${this.maxKnownTimestamps.messages}`);
     } catch (e) {
       logger.debug('CRDT', 'Erreur initLamportClock:', e);
     }
@@ -275,26 +295,14 @@ export class CRDTEngine {
   }
 
   async sendSyncRequest(peerId) {
-    const allMsgs = await dbManager.getAll('messages');
-    const allThreads = await dbManager.getAll('forum_threads');
-    const allCommits = await dbManager.getAll('file_commits');
-    const allFolders = await dbManager.getAll('drive_folders');
-    const allDeletions = await dbManager.getAll('drive_deletions');
-
-    const highestMsgTime = allMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
-    const highestThreadTime = allThreads.reduce((max, t) => Math.max(max, t.createdAt || 0), 0);
-    const highestCommitTime = allCommits.reduce((max, c) => Math.max(max, c.timestamp || 0), 0);
-    const highestFolderTime = allFolders.reduce((max, f) => Math.max(max, f.createdAt || 0), 0);
-    const highestDeletionTime = allDeletions.reduce((max, d) => Math.max(max, d.timestamp || 0), 0);
-
     this.mesh.sendToPeer(peerId, {
       type: 'CRDT_SYNC_REQ',
       vector: {
-        messagesSince: highestMsgTime,
-        threadsSince: highestThreadTime,
-        commitsSince: highestCommitTime,
-        foldersSince: highestFolderTime,
-        deletionsSince: highestDeletionTime,
+        messagesSince: this.maxKnownTimestamps.messages || 0,
+        threadsSince: this.maxKnownTimestamps.threads || 0,
+        commitsSince: this.maxKnownTimestamps.commits || 0,
+        foldersSince: this.maxKnownTimestamps.folders || 0,
+        deletionsSince: this.maxKnownTimestamps.deletions || 0,
         lamport: this.lamportClock
       }
     });
@@ -306,17 +314,81 @@ export class CRDTEngine {
 
     this.tick(vector.lamport || 0);
 
-    const allMsgs = await dbManager.getAll('messages');
-    const allThreads = await dbManager.getAll('forum_threads');
-    const allCommits = await dbManager.getAll('file_commits');
-    const allFolders = await dbManager.getAll('drive_folders');
-    const allDeletions = await dbManager.getAll('drive_deletions');
+    // Requêtes delta ciblées via index ou curseur sans scan complet
+    const msgSince = vector.messagesSince || 0;
+    const thrSince = vector.threadsSince || 0;
+    const cmtSince = vector.commitsSince || 0;
+    const fldSince = vector.foldersSince || 0;
+    const delSince = vector.deletionsSince || 0;
 
-    const newMsgs = allMsgs.filter((m) => (m.timestamp || 0) > (vector.messagesSince || 0));
-    const newThreads = allThreads.filter((t) => (t.createdAt || 0) > (vector.threadsSince || 0));
-    const newCommits = allCommits.filter((c) => (c.timestamp || 0) > (vector.commitsSince || 0));
-    const newFolders = allFolders.filter((f) => (f.createdAt || 0) > (vector.foldersSince || 0));
-    const newDeletions = allDeletions.filter((d) => (d.timestamp || 0) > (vector.deletionsSince || 0));
+    let newMsgs = [];
+    let newThreads = [];
+    let newCommits = [];
+    let newFolders = [];
+    let newDeletions = [];
+
+    try {
+      if (this.maxKnownTimestamps.messages > msgSince) {
+        newMsgs = await dbManager.queryCursor({
+          storeName: 'messages',
+          indexName: 'timestamp',
+          range: IDBKeyRange.lowerBound(msgSince, true),
+          limit: 100
+        });
+      }
+    } catch {
+      const all = await dbManager.getAll('messages');
+      newMsgs = all.filter(m => (m.timestamp || 0) > msgSince).slice(0, 100);
+    }
+
+    try {
+      if (this.maxKnownTimestamps.threads > thrSince) {
+        newThreads = await dbManager.queryCursor({
+          storeName: 'forum_threads',
+          indexName: 'createdAt',
+          range: IDBKeyRange.lowerBound(thrSince, true),
+          limit: 50
+        });
+      }
+    } catch {
+      const all = await dbManager.getAll('forum_threads');
+      newThreads = all.filter(t => (t.createdAt || 0) > thrSince).slice(0, 50);
+    }
+
+    try {
+      if (this.maxKnownTimestamps.commits > cmtSince) {
+        newCommits = await dbManager.queryCursor({
+          storeName: 'file_commits',
+          indexName: 'timestamp',
+          range: IDBKeyRange.lowerBound(cmtSince, true),
+          limit: 50
+        });
+      }
+    } catch {
+      const all = await dbManager.getAll('file_commits');
+      newCommits = all.filter(c => (c.timestamp || 0) > cmtSince).slice(0, 50);
+    }
+
+    try {
+      if (this.maxKnownTimestamps.folders > fldSince) {
+        newFolders = await dbManager.queryCursor({
+          storeName: 'drive_folders',
+          indexName: 'createdAt',
+          range: IDBKeyRange.lowerBound(fldSince, true),
+          limit: 50
+        });
+      }
+    } catch {
+      const all = await dbManager.getAll('drive_folders');
+      newFolders = all.filter(f => (f.createdAt || 0) > fldSince).slice(0, 50);
+    }
+
+    try {
+      if (this.maxKnownTimestamps.deletions > delSince) {
+        const all = await dbManager.getAll('drive_deletions');
+        newDeletions = all.filter(d => (d.timestamp || 0) > delSince).slice(0, 50);
+      }
+    } catch {}
 
     if (
       newMsgs.length > 0 ||

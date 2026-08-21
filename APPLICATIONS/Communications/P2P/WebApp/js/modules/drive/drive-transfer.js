@@ -3,7 +3,7 @@ import { logger } from '../../core/logger.js';
  * Gestionnaire de Transfert en Essaim (Swarm Downloader) & Auto-Réplication P2P (2025/2026)
  * Téléchargement multi-sources type BitTorrent : inventaire d'availability,
  * planification RAREST-FIRST, parallélisme borné, ré-affectation sur timeout,
- * réassemblage en tranches 16 Ko, vérification SHA-256, validation Merkle RFC 6962 et auto-seeding.
+ * réassemblage en tranches 16 Ko in-place Zéro-Copie, vérification SHA-256, validation Merkle RFC 6962.
  */
 
 import { CONFIG } from '../../core/config.js';
@@ -118,22 +118,38 @@ export class DriveTransferManager {
       }
     });
 
-    this.mesh.on('peer-left', (peerId) => {
+    this.mesh.on('peer-left', ({ peerId }) => {
+      const pid = peerId || '';
       this.activeDownloads.forEach((dl) => {
         let changed = false;
         dl.inFlight.forEach((info, hash) => {
-          if (info.peerId === peerId) {
+          if (info.peerId === pid) {
             dl.inFlight.delete(hash);
             changed = true;
           }
         });
-        dl.providers.forEach((peerSet) => peerSet.delete(peerId));
+        dl.providers.forEach((peerSet) => peerSet.delete(pid));
         if (changed) this._scheduleRequests(dl);
       });
     });
 
-    this.mesh.on('raw-binary-received', ({ buffer }) => {
-      this.handleRawBinarySlice(buffer);
+    // Ré-interrogation automatique lors de l'arrivée ou du retour d'un pair
+    this.mesh.on('peer-ready', (peer) => {
+      if (!peer || !peer.id) return;
+      this.activeDownloads.forEach((dl) => {
+        if (dl.missingHashes && dl.missingHashes.size > 0) {
+          this.mesh.sendToPeer(peer.id, {
+            type: 'CHUNK_AVAILABILITY_REQ',
+            fileId: dl.commit.fileId,
+            hashes: Array.from(dl.missingHashes)
+          });
+        }
+      });
+    });
+
+    // Écoute de l'événement standard 'chunk-received' émis par p2p-mesh.js
+    this.mesh.on('chunk-received', ({ peerId, buffer }) => {
+      this.handleRawBinarySlice(buffer, peerId);
     });
   }
 
@@ -201,53 +217,66 @@ export class DriveTransferManager {
   }
 
   /**
-   * Traite une tranche binaire entrante
+   * Traite une tranche binaire entrante avec assemblage In-Place Zéro-Copie
    */
-  async handleRawBinarySlice(buffer) {
-    if (!buffer || buffer.byteLength < 73) return;
+  async handleRawBinarySlice(buffer, peerId = null) {
+    const HEADER_SIZE = 41;
+    if (!buffer || buffer.byteLength < HEADER_SIZE) return;
     const bytes = new Uint8Array(buffer);
     if (bytes[0] !== 0xFD && bytes[0] !== 0xFC) return;
 
-    const hash = new TextDecoder().decode(bytes.subarray(1, 65)).trim();
+    const rawHashBytes = bytes.subarray(1, 33);
+    const hashHex = CryptoVault.bufferToHex(rawHashBytes);
+
     const view = new DataView(buffer);
-    const sliceIdx = view.getUint16(65, false);
-    const totalSlices = view.getUint16(67, false);
-    const totalChunkSize = view.getUint32(69, false);
-    const slicePayload = buffer.slice(73);
+    const sliceIdx = view.getUint16(33, false);
+    const totalSlices = view.getUint16(35, false);
+    const totalChunkSize = view.getUint32(37, false);
+    const payloadLength = buffer.byteLength - HEADER_SIZE;
 
     const L = CONFIG.LIMITS;
-    if (!/^[0-9a-f]{64}$/.test(hash) ||
-        totalSlices < 1 || totalSlices > L.MAX_BINARY_SLICES ||
+    if (!/^[0-9a-f]{64}$/.test(hashHex) ||
+        totalSlices < 1 || totalSlices > (L.MAX_BINARY_SLICES || 512) ||
         sliceIdx >= totalSlices ||
-        totalChunkSize < 1 || totalChunkSize > L.MAX_BINARY_CHUNK_BYTES) {
-      logger.warn('Drive', `[Transfer] En-tête de tranche invalide rejeté (slices=${totalSlices}, size=${totalChunkSize})`);
+        totalChunkSize < 1 || totalChunkSize > (L.MAX_BINARY_CHUNK_BYTES || 2097152)) {
+      logger.warn('Drive', `[Transfer] En-tête de tranche binaire invalide rejeté`);
+      if (peerId) this._recordPeerFailure(peerId);
       return;
     }
 
-    let entry = this.pendingChunkSlices.get(hash);
-    if (!entry) {
-      entry = { slices: new Map(), received: 0, totalSlices, totalChunkSize, createdAt: Date.now() };
-      this.pendingChunkSlices.set(hash, entry);
+    const SLICE_PAYLOAD_SIZE = 16384 - HEADER_SIZE; // 16343 octets
+    const expectedOffset = sliceIdx * SLICE_PAYLOAD_SIZE;
+    if (expectedOffset + payloadLength > totalChunkSize) {
+      logger.warn('Drive', `[Transfer] Débordement de tranche détecté: ${expectedOffset + payloadLength} > ${totalChunkSize}`);
+      if (peerId) this._recordPeerFailure(peerId);
+      return;
     }
+
+    let entry = this.pendingChunkSlices.get(hashHex);
+    if (!entry) {
+      // Pré-allocation DIRECTE du tampon de destination in-place
+      entry = {
+        targetBuffer: new Uint8Array(totalChunkSize),
+        receivedSlices: new Set(),
+        totalSlices,
+        totalChunkSize,
+        peerId,
+        createdAt: Date.now()
+      };
+      this.pendingChunkSlices.set(hashHex, entry);
+    }
+
     if (entry.totalSlices !== totalSlices || entry.totalChunkSize !== totalChunkSize) return;
 
-    if (!entry.slices.has(sliceIdx)) {
-      entry.slices.set(sliceIdx, slicePayload);
-      entry.received++;
+    if (!entry.receivedSlices.has(sliceIdx)) {
+      // Écriture directe à la position cible sans copie intermédiaire
+      entry.targetBuffer.set(bytes.subarray(HEADER_SIZE), expectedOffset);
+      entry.receivedSlices.add(sliceIdx);
     }
 
-    if (entry.received === entry.totalSlices) {
-      const fullChunk = new Uint8Array(entry.totalChunkSize);
-      let offset = 0;
-      for (let i = 0; i < entry.totalSlices; i++) {
-        const slice = entry.slices.get(i);
-        if (slice) {
-          fullChunk.set(new Uint8Array(slice), offset);
-          offset += slice.byteLength;
-        }
-      }
-      this.pendingChunkSlices.delete(hash);
-      await this.handleCompleteChunkReceived(hash, fullChunk.buffer);
+    if (entry.receivedSlices.size === entry.totalSlices) {
+      this.pendingChunkSlices.delete(hashHex);
+      await this.handleCompleteChunkReceived(hashHex, entry.targetBuffer.buffer, entry.peerId || peerId);
     }
   }
 
@@ -263,10 +292,11 @@ export class DriveTransferManager {
     this.activeDownloads.clear();
   }
 
-  async handleCompleteChunkReceived(hash, arrayBuffer) {
+  async handleCompleteChunkReceived(hash, arrayBuffer, peerId = null) {
     const computedHash = await CryptoVault.hashSHA256(arrayBuffer);
     if (computedHash !== hash) {
-      logger.warn('Drive', `[Transfer] Bloc corrompu rejeté (${hash} != ${computedHash})`);
+      logger.warn('Drive', `🚨 [Transfer] Bloc corrompu rejeté (${hash} != ${computedHash})`);
+      if (peerId) this._recordPeerFailure(peerId);
       this.activeDownloads.forEach((dl) => {
         if (dl.inFlight.has(hash)) {
           dl.inFlight.delete(hash);
@@ -276,6 +306,7 @@ export class DriveTransferManager {
       return;
     }
 
+    if (peerId) this._recordPeerSuccess(peerId);
     await dbManager.saveChunk(hash, arrayBuffer);
 
     this.activeDownloads.forEach((dl, fileId) => {
@@ -300,9 +331,14 @@ export class DriveTransferManager {
   _scheduleRequests(dl) {
     if (dl.missingHashes.size === 0) return;
 
-    const maxParallel = CONFIG.DRIVE.SWARM_MAX_PARALLEL_CHUNKS || 4;
+    // QoS : bride le téléchargement à 1 bloc en parallèle si un appel audio/vidéo est actif
+    const isCallActive = this.mesh.isMediaActive && this.mesh.isMediaActive();
+    const maxParallel = isCallActive
+      ? (CONFIG.DRIVE.QOS_CALL_PARALLEL_CHUNKS || 1)
+      : (CONFIG.DRIVE.SWARM_MAX_PARALLEL_CHUNKS || 6);
+
     const now = Date.now();
-    const TIMEOUT_CHUNK_MS = 12000;
+    const TIMEOUT_CHUNK_MS = CONFIG.DRIVE.CHUNK_REQUEST_TIMEOUT || 8000;
 
     dl.inFlight.forEach((info, hash) => {
       if (now - info.sentAt > TIMEOUT_CHUNK_MS) {
@@ -398,12 +434,10 @@ export class DriveTransferManager {
         triedPeers: new Map(),
         onProgress,
         resolve,
-        reject,
-        startedAt: Date.now()
+        reject
       };
-      this.activeDownloads.set(commit.fileId, dl);
 
-      if (onProgress) onProgress(Math.round((alreadyPresent / commit.chunks.length) * 100));
+      this.activeDownloads.set(commit.fileId, dl);
 
       this.mesh.broadcast({
         type: 'CHUNK_AVAILABILITY_REQ',
@@ -411,7 +445,6 @@ export class DriveTransferManager {
         hashes: Array.from(missingHashes)
       });
 
-      this._scheduleRequests(dl);
       dl.pump = setInterval(() => {
         if (!this.activeDownloads.has(commit.fileId)) {
           clearInterval(dl.pump);
@@ -424,35 +457,23 @@ export class DriveTransferManager {
         if (this.activeDownloads.has(commit.fileId)) {
           clearInterval(dl.pump);
           this.activeDownloads.delete(commit.fileId);
-          reject(new Error(`Délai dépassé pour ${commit.fileName} (${dl.missingHashes.size} blocs manquants)`));
+          reject(new Error(`Timeout de téléchargement pour "${commit.fileName}"`));
         }
       }, 180000);
+
+      this._scheduleRequests(dl);
     });
   }
 
-  /**
-   * Auto-réplication en arrière-plan (Swarm Auto-Seeding sans duplication de fichier assemblé)
-   */
-  async autoReplicateFile(commit) {
-    if (!commit || !commit.chunks || commit.chunks.length === 0) return;
+  async autoReplicate(commit) {
     if (this.autoReplicatingFiles.has(commit.fileId)) return;
     this.autoReplicatingFiles.add(commit.fileId);
-
-    const missing = [];
-    for (const chunk of commit.chunks) {
-      if (!(await dbManager.hasChunk(chunk.hash))) missing.push(chunk.hash);
-    }
-    if (missing.length === 0) {
-      this.autoReplicatingFiles.delete(commit.fileId);
-      return;
-    }
-
-    logger.info('Drive', `[Transfer] 🔄 Auto-réplication swarm pour "${commit.fileName}" (${missing.length}/${commit.chunks.length} blocs manquants)...`);
     try {
-      await this.downloadFile(commit, () => {}, { assemble: false });
-      logger.info('Drive', `[Transfer] 🌟 "${commit.fileName}" répliqué en blocs (seeding actif) !`);
+      logger.info('Drive', `🔄 Démarrage auto-réplication pour : "${commit.fileName}"`);
+      await this.downloadFile(commit, null, { assemble: false });
+      logger.info('Drive', `✅ Auto-réplication terminée pour : "${commit.fileName}"`);
     } catch (err) {
-      logger.warn('Drive', `[Transfer] Auto-réplication partielle pour "${commit.fileName}":`, err.message);
+      logger.debug('Drive', `Auto-réplication non complétée pour "${commit.fileName}":`, err.message);
     } finally {
       this.autoReplicatingFiles.delete(commit.fileId);
     }
@@ -461,30 +482,36 @@ export class DriveTransferManager {
   async completeDownload(fileId) {
     const dl = this.activeDownloads.get(fileId);
     if (!dl) return;
+
     if (dl.pump) clearInterval(dl.pump);
     if (dl.timeout) clearTimeout(dl.timeout);
     this.activeDownloads.delete(fileId);
 
     try {
-      // 1. Validation cryptographique de l'arbre Merkle complet RFC 6962
-      const chunkHashes = dl.commit.chunks.map((c) => c.hash);
-      const computedRoot = await MerkleTree.computeRoot(chunkHashes);
-      if (dl.commit.rootMerkleHash && computedRoot !== dl.commit.rootMerkleHash) {
-        logger.error('Drive', `🚨 [Transfer] Échec intégrité Merkle racine : ${computedRoot} !== ${dl.commit.rootMerkleHash}`);
-        throw new Error(`Échec d'intégrité Merkle : racine invalide (${computedRoot.substring(0, 12)} !== ${dl.commit.rootMerkleHash.substring(0, 12)})`);
+      if (dl.commit.rootMerkleHash && dl.commit.chunks.length > 0) {
+        const computedRoot = await MerkleTree.computeRootFromHashes(dl.commit.chunks.map((c) => c.hash));
+        if (computedRoot !== dl.commit.rootMerkleHash) {
+          throw new Error(`Échec validation arbre de Merkle pour "${dl.commit.fileName}"`);
+        }
+        logger.info('Drive', `🌳 Validation Merkle RFC 6962 réussie pour "${dl.commit.fileName}" !`);
       }
 
-      // 2. Si mode réplication seule, résolution immédiate sans assemblage disque
-      if (dl.assemble === false) {
+      if (!dl.assemble) {
+        if (dl.onProgress) dl.onProgress(100);
         dl.resolve(null);
         return;
       }
 
-      // 3. Assemblage en flux (streaming OPFS)
-      const result = await FileChunker.assembleFileStreaming(dl.commit.chunks, dl.commit.mimeType, dl.commit.fileName);
-      dl.resolve(result);
-    } catch (e) {
-      dl.reject(e);
+      const fileResult = await FileChunker.assembleFileStreaming(
+        dl.commit.chunks,
+        dl.commit.mimeType,
+        dl.commit.fileName
+      );
+      if (dl.onProgress) dl.onProgress(100);
+      dl.resolve(fileResult);
+    } catch (err) {
+      logger.error('Drive', '[Transfer] Échec finalisation assemblage:', err);
+      dl.reject(err);
     }
   }
 }

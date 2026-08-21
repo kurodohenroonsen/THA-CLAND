@@ -200,23 +200,33 @@ class P2PApp {
     this.presence.onPresenceUpdate((peerList) => {
       this.renderPeersRoster(peerList);
 
-      // Calcul de la latence moyenne + qualité de connexion
+      // Calcul eMOS ITU-T G.107 multi-critères (RTT + Jitter + Perte)
       const footerQuality = document.getElementById('footer-quality');
       if (peerList.length > 0) {
         const avgLat = Math.round(peerList.reduce((acc, p) => acc + (p.latencyMs || 0), 0) / peerList.length);
+        const minMos = peerList.reduce((min, p) => Math.min(min, p.qos?.mos || 4.5), 4.5);
         if (footerLatency) footerLatency.textContent = `⚡ Latence : ${avgLat} ms`;
         if (footerQuality) {
           let cls, label;
-          if (avgLat <= 40) { cls = 'q-excellent'; label = 'Excellente'; }
-          else if (avgLat <= 100) { cls = 'q-good'; label = 'Bonne'; }
-          else if (avgLat <= 220) { cls = 'q-medium'; label = 'Moyenne'; }
-          else { cls = 'q-poor'; label = 'Faible'; }
+          if (minMos >= 4.1) { cls = 'q-excellent'; label = `Excellente (${minMos.toFixed(1)})`; }
+          else if (minMos >= 3.6) { cls = 'q-good'; label = `Bonne (${minMos.toFixed(1)})`; }
+          else if (minMos >= 2.8) { cls = 'q-medium'; label = `Dégradée (${minMos.toFixed(1)})`; }
+          else { cls = 'q-poor'; label = `Critique (${minMos.toFixed(1)})`; }
           footerQuality.className = `conn-quality ${cls}`;
           footerQuality.textContent = label;
         }
       } else {
         if (footerLatency) footerLatency.textContent = '⚡ Latence : -- ms';
         if (footerQuality) { footerQuality.className = 'conn-quality'; footerQuality.textContent = ''; }
+      }
+    });
+
+    // Écouteurs de résilience réseau et cycle de vie
+    window.addEventListener('online', () => this.mesh?.handleNetworkOnline());
+    window.addEventListener('offline', () => this.mesh?.handleNetworkOffline());
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && this.mesh) {
+        this.mesh.handleNetworkOnline();
       }
     });
   }

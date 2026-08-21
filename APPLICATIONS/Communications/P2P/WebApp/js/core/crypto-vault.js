@@ -167,9 +167,9 @@ export class CryptoVault {
     const buffer =
       typeof data === 'string'
         ? new TextEncoder().encode(data)
-        : data instanceof Uint8Array
-        ? data.buffer
-        : data;
+      : ArrayBuffer.isView(data)
+      ? data
+      : data;
 
     const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
     return CryptoVault.bufferToHex(hashBuffer);

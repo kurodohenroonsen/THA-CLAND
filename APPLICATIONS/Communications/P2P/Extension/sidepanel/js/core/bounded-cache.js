@@ -208,3 +208,87 @@ export class BoundedLRUCache {
   get size() { return this._map.size; }
   get currentBytes() { return this._currentBytes; }
 }
+
+/**
+ * Cache de déduplication multi-générationnel glissant (2025/2026).
+ * Évite le GC thrashing et élimine les tempêtes d'écho en P2P.
+ */
+export class GenerationalSlidingCache {
+  constructor({ generationSize = 20000, rotateIntervalMs = 90000 } = {}) {
+    this.generationSize = generationSize;
+    this.rotateIntervalMs = rotateIntervalMs;
+    this.generations = [new Set(), new Set(), new Set()]; // [Current, Previous, Old]
+    this.timer = setInterval(() => this.rotate(), this.rotateIntervalMs);
+  }
+
+  addIfNew(key) {
+    if (this.has(key)) return false;
+    if (this.generations[0].size >= this.generationSize) {
+      this.rotate();
+    }
+    this.generations[0].add(key);
+    return true;
+  }
+
+  has(key) {
+    return this.generations[0].has(key) ||
+           this.generations[1].has(key) ||
+           this.generations[2].has(key);
+  }
+
+  rotate() {
+    this.generations.pop();
+    this.generations.unshift(new Set());
+  }
+
+  get size() {
+    return this.generations[0].size + this.generations[1].size + this.generations[2].size;
+  }
+
+  clear() {
+    this.generations = [new Set(), new Set(), new Set()];
+  }
+
+  destroy() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    this.clear();
+  }
+}
+
+/**
+ * Enveloppe de diffusion épidémique Gossip (GossipEnvelope).
+ * Prévention proactive des boucles et limitation du rayon de diffusion (TTL/Hops).
+ */
+export class GossipEnvelope {
+  static wrap(type, payload, originPeerId, ttl = 8) {
+    return {
+      _gspId: `gsp_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`,
+      _type: type,
+      _origin: originPeerId,
+      _hops: 0,
+      _ttl: ttl,
+      _path: [originPeerId],
+      _time: Date.now(),
+      payload
+    };
+  }
+
+  static shouldRelay(env, localPeerId, targetPeerId, maxHops = 10) {
+    if (!env || typeof env._ttl !== 'number' || env._ttl <= 1) return false;
+    if (env._hops >= maxHops) return false;
+    if (Array.isArray(env._path) && env._path.includes(targetPeerId)) return false;
+    return true;
+  }
+
+  static advance(env, localPeerId) {
+    return {
+      ...env,
+      _hops: (env._hops || 0) + 1,
+      _ttl: Math.max(0, (env._ttl || 8) - 1),
+      _path: Array.isArray(env._path) ? [...env._path, localPeerId] : [localPeerId]
+    };
+  }
+}

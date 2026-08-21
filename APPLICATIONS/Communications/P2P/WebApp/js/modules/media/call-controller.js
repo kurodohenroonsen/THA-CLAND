@@ -124,6 +124,19 @@ export class CallController {
     this.presence.onPresenceUpdate(() => {
       this.updateVideoGrid();
     });
+
+    // 4. Alertes de congestion réseau réactives
+    if (this.mesh.telemetry) {
+      this.mesh.telemetry.on('congestion-alert', ({ peerId, severity, metrics }) => {
+        if (this.isInCall) {
+          const peer = this.presence.roster.get(peerId);
+          const name = peer ? peer.name : (peerId.substring(0, 8) + '...');
+          if (severity === 'critical') {
+            Toast.warning(`Liaison réseau instable avec ${name} (Perte: ${metrics.audio?.lossPct || 0}%, RTT: ${metrics.rttMs}ms)`);
+          }
+        }
+      });
+    }
   }
 
   async handleJoinVoiceRoom() {
@@ -461,10 +474,10 @@ export class CallController {
     this.bitrateInterval = setInterval(() => {
       if (!this.isVideoActive && !this.isScreenSharing) return;
       this.presence.roster.forEach((peer, peerId) => {
-        const rtt = (peer.latencyMs || 40) * 2; // latencyMs ≈ RTT/2
+        const rtt = peer.latencyMs || 40;
         this.mesh.applyVideoBitrate(peerId, rtt);
       });
-    }, CONFIG.VIDEO_BITRATE.ADAPT_INTERVAL);
+    }, CONFIG.VIDEO_BITRATE?.ADAPT_INTERVAL || 2000);
   }
 
   stopBitrateAdaptation() {

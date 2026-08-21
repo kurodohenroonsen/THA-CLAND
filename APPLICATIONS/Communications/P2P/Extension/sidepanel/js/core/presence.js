@@ -40,7 +40,8 @@ export class PresenceManager {
         isAudioActive: false,
         isVideoActive: false,
         inCall: false,
-        isKeyVerified: false
+        isKeyVerified: false,
+        qos: { mos: 4.5, grade: 'Excellente', cls: 'q-excellent' }
       });
       this.notifyUpdate();
     });
@@ -54,6 +55,19 @@ export class PresenceManager {
     this.mesh.on('message-received', ({ peerId, message }) => {
       this.handleControlMessage(peerId, message);
     });
+
+    // Écoute de la télémétrie WebRTC native pour le vrai RTT et le score eMOS
+    if (this.mesh.telemetry) {
+      this.mesh.telemetry.on('stats-updated', ({ peerId, metrics }) => {
+        const peer = this.roster.get(peerId);
+        if (peer && metrics) {
+          if (metrics.rttMs !== null) peer.latencyMs = metrics.rttMs;
+          if (metrics.qos) peer.qos = metrics.qos;
+          peer.lastSeen = Date.now();
+          this.notifyUpdate();
+        }
+      });
+    }
   }
 
   start() {
