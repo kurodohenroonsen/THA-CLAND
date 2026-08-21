@@ -1,0 +1,43 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable",
+      "WebWorker"
+    ],
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "alwaysStrict": true,
+    "noImplicitAny": false,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "noImplicitThis": true,
+    "useUnknownInCatchVariables": true,
+    "allowJs": true,
+    "skipLibCheck": true,
+    "types": [
+      "chrome"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["Extension/sidepanel/js/core/*"],
+      "@modules/*": ["Extension/sidepanel/js/modules/*"],
+      "@ui/*": ["Extension/sidepanel/js/ui/*"]
+    }
+  },
+  "include": [
+    "Extension/**/*.js",
+    "WebApp/**/*.js",
+    "types/**/*.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.min.js"
+  ]
+}
