@@ -1,0 +1,338 @@
+/**
+ * Styles du Drive Partagé P2P, Hiérarchie de Dossiers & Timeline de Versioning
+ */
+
+.drive-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  padding: 12px;
+  gap: 12px;
+}
+
+/* Barre d'outils et Fil d'Ariane (Breadcrumbs) */
+.drive-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+}
+
+.drive-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.crumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.crumb-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--accent-cyan);
+}
+
+.crumb-item.active {
+  color: #ffffff;
+  font-weight: 600;
+  cursor: default;
+}
+
+.crumb-separator {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* Zone de Glisser-Déposer */
+.drive-drop-zone {
+  border: 2px dashed rgba(6, 182, 212, 0.4);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  text-align: center;
+  background: rgba(6, 182, 212, 0.03);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.drive-drop-zone:hover, .drive-drop-zone.drag-active {
+  border-color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.08);
+  box-shadow: 0 0 16px rgba(6, 182, 212, 0.2);
+}
+
+.drop-icon {
+  font-size: 24px;
+  margin-bottom: 2px;
+}
+
+.drop-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.drop-subtitle {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* Barre de Progression */
+.progress-bar-container {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--grad-primary);
+  transition: width 0.2s ease-out;
+}
+
+/* Grille des Dossiers */
+.drive-folders-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.drive-folder-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.drive-folder-card:hover {
+  border-color: var(--accent-cyan);
+  background: var(--bg-glass-hover);
+  transform: translateY(-1px);
+}
+
+.folder-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.folder-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.folder-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.btn-folder-delete {
+  opacity: 0;
+  background: transparent;
+  border: none;
+  color: var(--accent-rose);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 11px;
+  transition: opacity var(--transition-fast);
+}
+
+.drive-folder-card:hover .btn-folder-delete {
+  opacity: 1;
+}
+
+/* Bouton Dossier Parent */
+.drive-folder-card.is-parent-dir {
+  background: rgba(255, 255, 255, 0.03);
+  border-style: dashed;
+}
+
+/* Liste des Fichiers */
+.drive-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drive-file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  transition: all var(--transition-fast);
+}
+
+.drive-file-card:hover {
+  border-color: var(--border-focus);
+  background: var(--bg-glass-hover);
+}
+
+.file-icon-box {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.file-ext-tag {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--accent-violet);
+}
+
+.file-info-box {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.file-commit-msg {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  font-style: italic;
+  margin-top: 2px;
+}
+
+.file-actions-box {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Timeline Historique des Versions */
+.history-timeline-list {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding-left: 20px;
+}
+
+.history-timeline-list::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 6px;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.timeline-item {
+  position: relative;
+  padding-bottom: 16px;
+}
+
+.timeline-dot {
+  position: absolute;
+  left: -20px;
+  top: 4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  border: 2px solid var(--accent-cyan);
+  box-shadow: 0 0 6px var(--accent-cyan);
+}
+
+.timeline-latest .timeline-dot {
+  background: var(--accent-emerald);
+  border-color: #ffffff;
+  box-shadow: 0 0 8px var(--accent-emerald);
+}
+
+.timeline-content {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px;
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.timeline-date {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.timeline-message {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.timeline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
