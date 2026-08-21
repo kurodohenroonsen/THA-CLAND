@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 /**
  * Gestionnaire de Flux Multimédias WebRTC (Micro, Caméra, Écran) & Gestion Conviviale des Permissions
  * Capture et gestion fine des pistes audio/vidéo locales avec redirection automatique vers la page d'autorisation.
@@ -56,10 +57,10 @@ export class MediaStreamManager {
       this.localStream = stream;
       return stream;
     } catch (err) {
-      console.warn('[Media] ⚠️ Erreur accès microphone:', err.name, err.message);
+      logger.warn('Media', 'Erreur accès microphone:', err.name, err.message);
 
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDismissedError' || err.message?.includes('dismissed') || err.message?.includes('denied')) {
-        console.log('[Media] 💡 Ouverture de la page d\'autorisation utilisateur conviviale...');
+        logger.info('Media', '💡 Ouverture de la page d\'autorisation utilisateur conviviale...');
         this.openPermissionHelper();
         throw new Error("L'accès au microphone est requis. Un onglet d'autorisation vient d'être ouvert pour activer votre micro en un clic.");
       }
@@ -97,7 +98,7 @@ export class MediaStreamManager {
       this.isVideoMuted = false;
       return this.localStream;
     } catch (err) {
-      console.warn('[Media] ⚠️ Erreur accès caméra:', err.name, err.message);
+      logger.warn('Media', 'Erreur accès caméra:', err.name, err.message);
 
       if (err.name === 'NotAllowedError' || err.message?.includes('dismissed') || err.message?.includes('denied')) {
         this.openPermissionHelper();
@@ -136,7 +137,7 @@ export class MediaStreamManager {
       this.screenStream = stream;
       return stream;
     } catch (err) {
-      console.error('[Media] Erreur partage écran:', err);
+      logger.error('Media', 'Erreur partage écran:', err);
       throw new Error("Partage d'écran annulé ou non supporté.");
     }
   }

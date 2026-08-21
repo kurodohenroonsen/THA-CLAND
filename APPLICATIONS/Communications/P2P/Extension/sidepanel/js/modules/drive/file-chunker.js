@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 /**
  * Module de Découpage de Fichiers (Chunking) & Merkle Hashing SHA-256
  * Découpe les fichiers en blocs de 512 Ko, calcule les empreintes cryptographiques et stocke en local.
@@ -105,8 +106,8 @@ export class FileChunker {
       }
       await writable.close();
     } catch (e) {
-      try { await writable.abort(); } catch {}
-      try { await dbManager.opfsRoot.removeEntry(tmpName); } catch {}
+      try { await writable.abort(); } catch (e) { logger.debug('Drive', 'Erreur abort writable:', e); }
+      try { await dbManager.opfsRoot.removeEntry(tmpName); } catch (e) { logger.debug('Drive', `Erreur suppression tmp OPFS ${tmpName}:`, e); }
       throw e;
     }
 
@@ -115,7 +116,7 @@ export class FileChunker {
     const typed = new File([file], fileName, { type: mimeType });
     // Nettoyage best-effort du fichier temporaire après un délai (le File reste
     // valide le temps du téléchargement navigateur).
-    typed._opfsCleanup = async () => { try { await dbManager.opfsRoot.removeEntry(tmpName); } catch {} };
+    typed._opfsCleanup = async () => { try { await dbManager.opfsRoot.removeEntry(tmpName); } catch (e) { logger.debug('Drive', `Erreur suppression tmp OPFS ${tmpName}:`, e); } };
     return typed;
   }
 }

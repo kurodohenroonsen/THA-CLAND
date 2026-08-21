@@ -1,3 +1,4 @@
+import { logger } from '../core/logger.js';
 /**
  * Système de Notifications Toasts Interactives
  */

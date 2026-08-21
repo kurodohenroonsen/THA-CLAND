@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 /**
  * Contrôleur du Drive Partagé P2P, Hiérarchie de Dossiers & Versioning
  * Gestion de l'explorateur arborescent (dossiers/sous-dossiers), fil d'Ariane, téléversement par découpage, historique des commits et téléchargement en essaim.
@@ -25,7 +26,7 @@ export class DriveController {
   }
 
   initUI() {
-    console.log('[Drive] 📁 Initialisation de l\'interface du Drive partagé avec arborescence...');
+    logger.debug('Drive', '📁 Initialisation de l\'interface du Drive partagé avec arborescence...');
     this.breadcrumbsContainer = document.getElementById('drive-breadcrumbs');
     this.foldersListContainer = document.getElementById('drive-folders-list');
     this.filesListContainer = document.getElementById('drive-files-list');
@@ -38,13 +39,13 @@ export class DriveController {
     // Clic sur la zone de dépôt pour ouvrir l'explorateur de fichiers
     if (this.dropZone && this.fileInput) {
       this.dropZone.addEventListener('click', () => {
-        console.log(`[Drive] 🖱️ Clic sur zone de dépôt -> Sélection de fichier pour le dossier "${this.currentPath}"...`);
+        logger.info('Drive', `🖱️ Clic sur zone de dépôt -> Sélection de fichier pour le dossier "${this.currentPath}"...`);
         this.fileInput.click();
       });
       
       this.fileInput.addEventListener('change', (e) => {
         if (e.target.files && e.target.files.length > 0) {
-          console.log('[Drive] 📄 Fichier sélectionné via explorateur:', e.target.files[0].name);
+          logger.debug('Drive', '📄 Fichier sélectionné via explorateur:', e.target.files[0].name);
           this.handleFileUpload(e.target.files[0]);
         }
       });
@@ -63,7 +64,7 @@ export class DriveController {
         e.preventDefault();
         this.dropZone.classList.remove('drag-active');
         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-          console.log('[Drive] 📥 Fichier déposé par Drag & Drop:', e.dataTransfer.files[0].name);
+          logger.debug('Drive', '📥 Fichier déposé par Drag & Drop:', e.dataTransfer.files[0].name);
           this.handleFileUpload(e.dataTransfer.files[0]);
         }
       });
@@ -90,7 +91,7 @@ export class DriveController {
 
   initListeners() {
     this.crdt.on('drive-commit-received', async (commit) => {
-      console.log(`[Drive] 🔄 Événement drive-commit-received [${commit?.fileName || 'fichier'}] -> Rechargement et auto-réplication`);
+      logger.info('Drive', `🔄 Événement drive-commit-received [${commit?.fileName || 'fichier'}] -> Rechargement et auto-réplication`);
       this.loadFiles();
       Toast.info(`Nouveau fichier "${commit?.fileName || 'document'}" partagé sur le Drive !`);
       // Auto-réplication swarm en arrière-plan (Co-seeding)
@@ -100,7 +101,7 @@ export class DriveController {
     });
 
     this.crdt.on('drive-synced', async (commits) => {
-      console.log('[Drive] 🔄 Événement drive-synced -> Rechargement complet du Drive et auto-réplication');
+      logger.info('Drive', '🔄 Événement drive-synced -> Rechargement complet du Drive et auto-réplication');
       this.loadFiles();
       if (Array.isArray(commits)) {
         for (const commit of commits) {
@@ -110,12 +111,12 @@ export class DriveController {
     });
 
     this.crdt.on('drive-folder-updated', () => {
-      console.log('[Drive] 🔄 Événement drive-folder-updated -> Rechargement des dossiers');
+      logger.info('Drive', '🔄 Événement drive-folder-updated -> Rechargement des dossiers');
       this.loadFiles();
     });
 
     this.crdt.on('drive-file-deleted', ({ fileId }) => {
-      console.log('[Drive] 🗑️ Fichier supprimé sur le réseau:', fileId);
+      logger.info('Drive', '🗑️ Fichier supprimé sur le réseau:', fileId);
       Toast.info('Un fichier a été supprimé du Drive.');
       this.loadFiles();
     });
@@ -123,7 +124,7 @@ export class DriveController {
 
   async navigateTo(folderPath) {
     this.currentPath = VersioningDAG.normalizePath(folderPath);
-    console.log(`[Drive] 🧭 Navigation vers le dossier: "${this.currentPath}"`);
+    logger.info('Drive', `🧭 Navigation vers le dossier: "${this.currentPath}"`);
     await this.loadFiles();
   }
 
@@ -399,7 +400,7 @@ export class DriveController {
       Toast.success(`« ${file.fileName} » supprimé.`);
       await this.loadFiles();
     } catch (err) {
-      console.error('[Drive] ❌ Erreur suppression:', err);
+      logger.error('Drive', 'Erreur suppression:', err);
       Toast.error('Échec de la suppression du fichier.');
     }
   }
@@ -424,13 +425,13 @@ export class DriveController {
     Modal.close('modal-create-folder');
 
     try {
-      console.log(`[Drive] 📁 Création du dossier "${folderName}" dans "${this.currentPath}"...`);
+      logger.info('Drive', `📁 Création du dossier "${folderName}" dans "${this.currentPath}"...`);
       const folder = await VersioningDAG.createFolder(this.currentPath, folderName, this.vault.userName);
       await this.crdt.broadcastCreateFolder(folder);
       Toast.success(`Dossier "${folder.name}" créé avec succès !`);
       await this.loadFiles();
     } catch (err) {
-      console.error('[Drive] ❌ Erreur création dossier:', err);
+      logger.error('Drive', 'Erreur création dossier:', err);
       Toast.error('Impossible de créer le dossier.');
     }
   }
@@ -455,7 +456,7 @@ export class DriveController {
     const cleanFolder = this.currentPath.replace(/[^a-z0-9]/g, '_');
     this.pendingFileId = `file_${cleanFolder}_${cleanName}`;
 
-    console.log(`[Drive] 📋 Préparation du commit pour: "${file.name}" dans "${this.currentPath}" (ID: ${this.pendingFileId})`);
+    logger.info('Drive', `📋 Préparation du commit pour: "${file.name}" dans "${this.currentPath}" (ID: ${this.pendingFileId})`);
 
     const existingHistory = await VersioningDAG.getFileHistory(this.pendingFileId);
     const isUpdate = existingHistory.length > 0;
@@ -477,7 +478,7 @@ export class DriveController {
     const inputMsg = document.getElementById('upload-commit-message');
     const commitMessage = inputMsg ? inputMsg.value.trim() : 'Mise à jour du document';
 
-    console.log(`[Drive] 🚀 Confirmation du téléversement pour "${this.pendingFile.name}" dans "${this.currentPath}"`);
+    logger.info('Drive', `🚀 Confirmation du téléversement pour "${this.pendingFile.name}" dans "${this.currentPath}"`);
     Modal.close('modal-file-upload');
 
     try {
@@ -504,7 +505,7 @@ export class DriveController {
         chunks: processed.chunks
       });
 
-      console.log(`[Drive] 💾 Commit créé dans le DAG [ID: ${commit.commitId}, Version: v${commit.versionNumber}]`);
+      logger.info('Drive', `💾 Commit créé dans le DAG [ID: ${commit.commitId}, Version: v${commit.versionNumber}]`);
 
       // 3. Diffusion du commit au réseau P2P
       await this.crdt.broadcastDriveCommit(commit);
@@ -513,7 +514,7 @@ export class DriveController {
       this.pendingFile = null;
       await this.loadFiles();
     } catch (err) {
-      console.error('[Drive] ❌ Erreur téléversement:', err);
+      logger.error('Drive', 'Erreur téléversement:', err);
       Toast.error(`Échec du téléversement : ${err.message}`);
     } finally {
       setTimeout(() => {
@@ -528,7 +529,7 @@ export class DriveController {
       buttonEl.disabled = true;
       buttonEl.innerHTML = '<span class="spinner-sm"></span> 0%';
 
-      console.log(`%c[Drive] ⬇️ Démarrage téléchargement P2P Swarm pour "${commit.fileName}" (v${commit.versionNumber})...`, 'color: #06b6d4; font-weight: bold;');
+      logger.info('Drive', `⬇️ Démarrage téléchargement P2P Swarm pour "${commit.fileName}" (v${commit.versionNumber})...`);
       Toast.info(`Recherche des blocs pour "${commit.fileName}" sur le réseau...`);
 
       const blob = await this.transferManager.downloadFile(commit, (percent) => {
@@ -550,12 +551,12 @@ export class DriveController {
         if (typeof blob._opfsCleanup === 'function') await blob._opfsCleanup();
       }, 60000);
 
-      console.log(`%c[Drive] ✅ Fichier assemblé et téléchargé avec succès !`, 'color: #10b981;');
+      logger.info('Drive', `✅ Fichier assemblé et téléchargé avec succès !`);
       Toast.success(`Téléchargement de ${commit.fileName} terminé avec succès !`);
       buttonEl.disabled = false;
       buttonEl.innerHTML = originalText;
     } catch (err) {
-      console.error('[Drive] ❌ Erreur téléchargement:', err);
+      logger.error('Drive', 'Erreur téléchargement:', err);
       Toast.error(`Erreur de téléchargement : ${err.message}`);
       buttonEl.disabled = false;
       buttonEl.innerHTML = '⬇️ Télécharger';
@@ -564,7 +565,7 @@ export class DriveController {
 
   async openFileHistoryModal(fileId) {
     this.activeHistoryFileId = fileId;
-    console.log(`[Drive] 📜 Ouverture de l'historique des versions pour fileId: ${fileId}`);
+    logger.info('Drive', `📜 Ouverture de l'historique des versions pour fileId: ${fileId}`);
     const history = await VersioningDAG.getFileHistory(fileId);
     const container = document.getElementById('history-timeline-list');
     const modalTitle = document.getElementById('modal-history-title');
@@ -616,14 +617,14 @@ export class DriveController {
 
   async revertFileToCommit(commit) {
     try {
-      console.log(`[Drive] ⏪ Restauration vers la version ${commit.versionNumber}...`);
+      logger.info('Drive', `⏪ Restauration vers la version ${commit.versionNumber}...`);
       const newCommit = await VersioningDAG.revertToVersion(commit, this.vault.userName);
       await this.crdt.broadcastDriveCommit(newCommit);
       Modal.close('modal-file-history');
       Toast.success(`Fichier restauré vers la version ${commit.versionNumber} (Nouveau commit v${newCommit.versionNumber}) !`);
       await this.loadFiles();
     } catch (e) {
-      console.error('[Drive] ❌ Erreur restauration:', e);
+      logger.error('Drive', 'Erreur restauration:', e);
       Toast.error('Échec de la restauration de version.');
     }
   }

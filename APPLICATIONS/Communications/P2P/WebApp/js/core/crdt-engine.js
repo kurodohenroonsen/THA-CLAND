@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 /**
  * Moteur CRDT (Conflict-Free Replicated Data Type) & Réconciliation P2P
  * Horloges logiques de Lamport, Vecteurs d'état et fusion déterministe pour Chat, Forums, Commits, Dossiers et Typing Indicators.
@@ -54,7 +55,7 @@ export class CRDTEngine {
       const j = Math.floor(Math.random() * (i + 1));
       [ids[i], ids[j]] = [ids[j], ids[i]];
     }
-    ids.slice(0, 3).forEach(pid => { this.sendSyncRequest(pid).catch(() => {}); });
+    ids.slice(0, 3).forEach(pid => { this.sendSyncRequest(pid).catch((err) => { logger.debug('CRDT', `Échec sync request vers ${pid}:`, err); }); });
   }
 
   /**
@@ -68,12 +69,12 @@ export class CRDTEngine {
     // Tolérance de compatibilité : un enregistrement local hérité, sans signature,
     // n'est jamais accepté depuis le réseau (il ne peut provenir que d'un pair non signé).
     if (!obj.signature || !obj.authorPubkey) {
-      console.warn('[CRDT] ⛔ Enregistrement non signé rejeté (id:', obj.id || obj.commitId || obj.path, ')');
+      logger.warn('CRDT', 'Enregistrement non signé rejeté (id:', obj.id || obj.commitId || obj.path, ')');
       return false;
     }
     const ok = await CryptoVault.verifyObject(obj);
     if (!ok) {
-      console.warn('[CRDT] ⛔ Signature invalide — enregistrement rejeté (usurpation ?)', obj.id || obj.commitId || obj.path);
+      logger.warn('CRDT', 'Signature invalide — enregistrement rejeté (usurpation ?)', obj.id || obj.commitId || obj.path);
     }
     return ok;
   }
@@ -86,7 +87,7 @@ export class CRDTEngine {
   emit(event, data) {
     if (this.listeners.has(event)) {
       this.listeners.get(event).forEach(cb => {
-        try { cb(data); } catch (e) { console.error(`[CRDT] Erreur écouteur ${event}:`, e); }
+        try { cb(data); } catch (e) { logger.error('CRDT', `Erreur écouteur ${event}:`, e); }
       });
     }
   }
@@ -95,7 +96,7 @@ export class CRDTEngine {
     // On attend que le canal de contrôle soit RÉELLEMENT ouvert (peer-ready) avant
     // de demander l'historique, sinon la requête est émise trop tôt et perdue.
     this.mesh.on('peer-ready', async (peer) => {
-      console.log(`[CRDT] 🤝 Canal prêt avec (${peer.id}) -> Envoi de la requête de synchronisation d'état CRDT`);
+      logger.info('CRDT', `🤝 Canal prêt avec (${peer.id}) -> Envoi de la requête de synchronisation d'état CRDT`);
       await this.sendSyncRequest(peer.id);
     });
 
@@ -105,10 +106,10 @@ export class CRDTEngine {
       // 1) Messages point-à-point / éphémères : jamais relayés ni dédupliqués.
       switch (message.type) {
         case 'CRDT_SYNC_REQ':
-          console.log(`[CRDT] 📥 Requête de synchro reçue de ${peerId}`);
+          logger.info('CRDT', `📥 Requête de synchro reçue de ${peerId}`);
           return this.handleSyncRequest(peerId, message);
         case 'CRDT_SYNC_RESP':
-          console.log(`[CRDT] 📥 Réponse de synchro (Delta) reçue de ${peerId}`);
+          logger.info('CRDT', `📥 Réponse de synchro (Delta) reçue de ${peerId}`);
           return this.handleSyncResponse(message);
         case 'TYPING_SIGNAL':
           this.emit('typing-signal', message);
@@ -122,31 +123,31 @@ export class CRDTEngine {
       let accepted = false;
       switch (message.type) {
         case 'CHAT_MSG':
-          console.log(`%c[CRDT] 💬 Message de chat reçu [ID: ${message.payload?.id}, De: ${message.payload?.authorName}]`, 'color: #06b6d4; font-weight: bold;');
+          logger.info('CRDT', `💬 Message de chat reçu [ID: ${message.payload?.id}, De: ${message.payload?.authorName}]`);
           accepted = await this.handleIncomingChatMessage(message);
           break;
         case 'FORUM_TOPIC':
-          console.log(`[CRDT] 📑 Sujet de forum reçu [Titre: ${message.payload?.title}]`);
+          logger.info('CRDT', `📑 Sujet de forum reçu [Titre: ${message.payload?.title}]`);
           accepted = await this.handleIncomingForumTopic(message);
           break;
         case 'FORUM_REPLY':
-          console.log(`[CRDT] 💬 Réponse de forum reçue pour Thread ID: ${message.threadId}`);
+          logger.info('CRDT', `💬 Réponse de forum reçue pour Thread ID: ${message.threadId}`);
           accepted = await this.handleIncomingForumReply(message);
           break;
         case 'DRIVE_COMMIT_BROADCAST':
-          console.log(`[CRDT] 📁 Commit de drive reçu [Fichier: ${message.payload?.fileName} v${message.payload?.versionNumber}]`);
+          logger.info('CRDT', `📁 Commit de drive reçu [Fichier: ${message.payload?.fileName} v${message.payload?.versionNumber}]`);
           accepted = await this.handleIncomingDriveCommit(message);
           break;
         case 'DRIVE_FOLDER_CREATE':
-          console.log(`[CRDT] 📁 Création de dossier reçue [Chemin: ${message.folder?.path}]`);
+          logger.info('CRDT', `📁 Création de dossier reçue [Chemin: ${message.folder?.path}]`);
           accepted = await this._applyFolderCreate(message);
           break;
         case 'DRIVE_FILE_DELETE':
-          console.log(`[CRDT] 🗑️ Suppression de fichier reçue [fileId: ${message.fileId}]`);
+          logger.info('CRDT', `🗑️ Suppression de fichier reçue [fileId: ${message.fileId}]`);
           accepted = await this._applyFileDelete(message);
           break;
         case 'DRIVE_FOLDER_DELETE':
-          console.log(`[CRDT] 🗑️ Suppression de dossier reçue [Chemin: ${message.folderPath}]`);
+          logger.info('CRDT', `🗑️ Suppression de dossier reçue [Chemin: ${message.folderPath}]`);
           accepted = await this._applyFolderDelete(message);
           break;
         default:
@@ -156,7 +157,7 @@ export class CRDTEngine {
       // 3) Réplication complète : rediffusion aux AUTRES pairs (multi-sauts), pour
       // qu'un maillage partiel converge quand même chez tous les membres.
       if (accepted && cid) {
-        try { await this.mesh.broadcast(message, peerId); } catch {}
+        try { await this.mesh.broadcast(message, peerId); } catch (err) { logger.warn('CRDT', 'Échec broadcast message CRDT:', err); }
       }
     });
   }
@@ -185,7 +186,7 @@ export class CRDTEngine {
       this.emit('drive-file-deleted', { fileId: message.fileId });
       return true;
     }
-    console.warn('[CRDT] ⛔ Suppression de fichier non authentifiée rejetée');
+    logger.warn('CRDT', 'Suppression de fichier non authentifiée rejetée');
     return false;
   }
 
@@ -197,7 +198,7 @@ export class CRDTEngine {
       this.emit('drive-folder-updated', { path: message.folderPath, deleted: true });
       return true;
     }
-    console.warn('[CRDT] ⛔ Suppression de dossier non authentifiée rejetée');
+    logger.warn('CRDT', 'Suppression de dossier non authentifiée rejetée');
     return false;
   }
 
@@ -220,7 +221,7 @@ export class CRDTEngine {
     const highestFolderTime = allFolders.reduce((max, f) => Math.max(max, f.createdAt || 0), 0);
     const highestDeletionTime = allDeletions.reduce((max, d) => Math.max(max, d.timestamp || 0), 0);
 
-    console.log(`[CRDT] 📤 Envoi Sync Vector vers ${peerId}: msgsSince=${highestMsgTime}, threadsSince=${highestThreadTime}, commitsSince=${highestCommitTime}, foldersSince=${highestFolderTime}`);
+    logger.info('CRDT', `📤 Envoi Sync Vector vers ${peerId}: msgsSince=${highestMsgTime}, threadsSince=${highestThreadTime}, commitsSince=${highestCommitTime}, foldersSince=${highestFolderTime}`);
 
     this.mesh.sendToPeer(peerId, {
       type: 'CRDT_SYNC_REQ',
@@ -254,7 +255,7 @@ export class CRDTEngine {
     const newFolders = allFolders.filter(f => (f.createdAt || 0) > (vector.foldersSince || 0));
     const newDeletions = allDeletions.filter(d => (d.timestamp || 0) > (vector.deletionsSince || 0));
 
-    console.log(`[CRDT] 🔍 Calcul delta pour ${peerId} : ${newMsgs.length} msgs, ${newThreads.length} threads, ${newCommits.length} commits, ${newFolders.length} dossiers, ${newDeletions.length} suppressions à transmettre`);
+    logger.info('CRDT', `🔍 Calcul delta pour ${peerId} : ${newMsgs.length} msgs, ${newThreads.length} threads, ${newCommits.length} commits, ${newFolders.length} dossiers, ${newDeletions.length} suppressions à transmettre`);
 
     if (newMsgs.length > 0 || newThreads.length > 0 || newCommits.length > 0 || newFolders.length > 0 || newDeletions.length > 0) {
       this.mesh.sendToPeer(peerId, {
@@ -359,11 +360,11 @@ export class CRDTEngine {
     // Vérifie la signature du thread en EXCLUANT `replies` (champ muté après signature).
     if (!incoming || !incoming.id) return false;
     if (!incoming.signature || !incoming.authorPubkey) {
-      console.warn('[CRDT] ⛔ Thread non signé rejeté', incoming.id);
+      logger.warn('CRDT', 'Thread non signé rejeté', incoming.id);
       return false;
     }
     if (!(await CryptoVault.verifyObject(incoming, { excludeFields: ['replies'] }))) {
-      console.warn('[CRDT] ⛔ Signature de thread invalide — rejeté', incoming.id);
+      logger.warn('CRDT', 'Signature de thread invalide — rejeté', incoming.id);
       return false;
     }
 
@@ -408,7 +409,7 @@ export class CRDTEngine {
     await dbManager.saveMessage(message);
     this._markSeen('msg:' + message.id);
 
-    console.log(`[CRDT] ✍️ Création message chat [ID: ${message.id}] dans #${channelId}`);
+    logger.info('CRDT', `✍️ Création message chat [ID: ${message.id}] dans #${channelId}`);
 
     const broadcastPayload = {
       type: 'CHAT_MSG',
@@ -417,7 +418,7 @@ export class CRDTEngine {
     };
 
     const sentCount = await this.mesh.broadcast(broadcastPayload);
-    console.log(`[CRDT] 📡 Message ${message.id} diffusé à ${sentCount} pair(s)`);
+    logger.info('CRDT', `📡 Message ${message.id} diffusé à ${sentCount} pair(s)`);
 
     return message;
   }

@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 /**
  * Gestionnaire de Stockage Local Asynchrone (IndexedDB + OPFS)
  * Stockage persistant et hors-ligne des messages, forums, index de versions, répertoires et blocs binaires.
@@ -76,9 +77,9 @@ export class LocalStorageManager {
         if (navigator.storage && navigator.storage.getDirectory) {
           try {
             this.opfsRoot = await navigator.storage.getDirectory();
-            console.log('[Storage] OPFS (Origin Private File System) actif.');
+            logger.info('Storage', 'OPFS (Origin Private File System) actif.');
           } catch (e) {
-            console.warn('[Storage] OPFS indisponible, fallback vers IndexedDB uniquement:', e);
+            logger.warn('Storage', 'OPFS indisponible, fallback vers IndexedDB uniquement:', e);
           }
         }
 
@@ -89,18 +90,18 @@ export class LocalStorageManager {
           if (navigator.storage && navigator.storage.persist) {
             const already = navigator.storage.persisted ? await navigator.storage.persisted() : false;
             const granted = already || await navigator.storage.persist();
-            console.log(`[Storage] Stockage persistant : ${granted ? 'accordé' : 'refusé (best-effort)'}`);
+            logger.info('Storage', `Stockage persistant : ${granted ? 'accordé' : 'refusé (best-effort)'}`);
           }
         } catch (e) {
-          console.warn('[Storage] Impossible de demander la persistance:', e);
+          logger.warn('Storage', 'Impossible de demander la persistance:', e);
         }
         
-        console.log('[Storage] IndexedDB initialisée.');
+        logger.info('Storage', 'IndexedDB initialisée.');
         resolve(this);
       };
 
       request.onerror = (event) => {
-        console.error('[Storage] Erreur ouverture IndexedDB:', event.target.error);
+        logger.error('Storage', 'Erreur ouverture IndexedDB:', event.target.error);
         reject(event.target.error);
       };
     });
@@ -273,7 +274,7 @@ export class LocalStorageManager {
         await writable.close();
         return { hash, size: arrayBuffer.byteLength, inOPFS: true };
       } catch (err) {
-        console.warn(`[Storage] Échec écriture OPFS pour chunk ${hash}, fallback IndexedDB:`, err);
+        logger.warn('Storage', `Échec écriture OPFS pour chunk ${hash}, fallback IndexedDB:`, err);
       }
     }
 

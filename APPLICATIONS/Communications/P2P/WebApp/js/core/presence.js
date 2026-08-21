@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 /**
  * Gestionnaire de Présence, Télémétrie & Battements de Cœur (Heartbeat) P2P
  * Maintient le statut actif des membres, calcule la latence (RTT) et gère le roster.
@@ -21,13 +22,13 @@ export class PresenceManager {
 
   notifyUpdate() {
     const peerList = Array.from(this.roster.values());
-    console.log(`[Presence] 👥 Mise à jour du Roster des membres (${peerList.length} en ligne)`);
+    logger.debug('Presence', `👥 Mise à jour du Roster des membres (${peerList.length} en ligne)`);
     this.listeners.forEach(cb => cb(peerList));
   }
 
   initListeners() {
     this.mesh.on('peer-joined', (peer) => {
-      console.log(`[Presence] ➕ Nouveau membre détecté dans la présence: ${peer.id}`);
+      logger.info('Presence', `➕ Nouveau membre détecté dans la présence: ${peer.id.substring(0, 10)}... (${peer.name || 'Membre'})`);
       this.roster.set(peer.id, {
         id: peer.id,
         name: peer.name || 'Membre P2P',
@@ -43,7 +44,7 @@ export class PresenceManager {
     });
 
     this.mesh.on('peer-left', ({ peerId }) => {
-      console.log(`[Presence] ➖ Membre parti de la présence: ${peerId}`);
+      logger.info('Presence', `➖ Membre parti de la présence: ${peerId.substring(0, 10)}...`);
       this.roster.delete(peerId);
       this.notifyUpdate();
     });
@@ -55,7 +56,7 @@ export class PresenceManager {
 
   start() {
     if (this.pingInterval) clearInterval(this.pingInterval);
-    console.log('[Presence] 💓 Démarrage de la boucle de Heartbeat (5s)...');
+    logger.info('Presence', '💓 Démarrage de la boucle de Heartbeat (5s)...');
 
     this.pingInterval = setInterval(() => {
       this.sendHeartbeat();
@@ -64,7 +65,7 @@ export class PresenceManager {
   }
 
   stop() {
-    console.log('[Presence] 🛑 Arrêt du gestionnaire de présence');
+    logger.info('Presence', '🛑 Arrêt du gestionnaire de présence');
     if (this.pingInterval) {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
@@ -84,7 +85,7 @@ export class PresenceManager {
     const now = Date.now();
     this.roster.forEach((peer, peerId) => {
       if (now - peer.lastSeen > CONFIG.TIMINGS.PEER_TIMEOUT) {
-        console.warn(`[Presence] ⏰ Timeout pair inactif: ${peerId} (Dernier contact il y a ${Math.round((now - peer.lastSeen) / 1000)}s)`);
+        logger.warn('Presence', `⏰ Timeout pair inactif: ${peerId.substring(0, 10)}... (Dernier contact il y a ${Math.round((now - peer.lastSeen) / 1000)}s)`);
         this.mesh.removePeer(peerId);
       }
     });
@@ -124,20 +125,20 @@ export class PresenceManager {
         if (msg.t) {
           const rtt = Math.max(1, Date.now() - msg.t);
           peer.latencyMs = Math.round(rtt / 2);
-          console.log(`[Presence] ⚡ Latence mesurée avec ${peerId}: ${peer.latencyMs} ms (RTT: ${rtt} ms)`);
+          logger.debug('Presence', `⚡ Latence mesurée avec ${peerId.substring(0, 10)}...: ${peer.latencyMs} ms (RTT: ${rtt} ms)`);
           this.notifyUpdate();
         }
         break;
 
       case 'PEER_HELLO':
-        console.log(`[Presence] 👋 Présentation reçue de ${peerId}: Nom="${msg.name}"`);
+        logger.info('Presence', `👋 Présentation reçue de ${peerId.substring(0, 10)}...: Nom="${msg.name}"`);
         if (msg.name) peer.name = msg.name;
         if (msg.pubkey) peer.pubkey = msg.pubkey;
         this.notifyUpdate();
         break;
 
       case 'MEDIA_SIGNAL':
-        console.log(`[Presence] 🎙️ Statut média de ${peerId}: EnAppel=${msg.inCall}, Audio=${msg.isAudioActive}, Vidéo=${msg.isVideoActive}`);
+        logger.debug('Presence', `🎙️ Statut média de ${peerId.substring(0, 10)}...: EnAppel=${msg.inCall}, Audio=${msg.isAudioActive}, Vidéo=${msg.isVideoActive}`);
         if (msg.inCall !== undefined) peer.inCall = msg.inCall;
         if (msg.isAudioActive !== undefined) peer.isAudioActive = msg.isAudioActive;
         if (msg.isVideoActive !== undefined) peer.isVideoActive = msg.isVideoActive;
@@ -147,7 +148,7 @@ export class PresenceManager {
   }
 
   broadcastMediaStatus(inCall, isAudioActive, isVideoActive) {
-    console.log(`[Presence] 📢 Diffusion de notre statut média: EnAppel=${inCall}, Audio=${isAudioActive}, Vidéo=${isVideoActive}`);
+    logger.debug('Presence', `📢 Diffusion de notre statut média: EnAppel=${inCall}, Audio=${isAudioActive}, Vidéo=${isVideoActive}`);
     this.mesh.broadcast({
       type: 'MEDIA_SIGNAL',
       inCall,

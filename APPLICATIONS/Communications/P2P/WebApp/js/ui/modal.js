@@ -1,3 +1,4 @@
+import { logger } from '../core/logger.js';
 /**
  * Gestionnaire de Fenêtres Modales Accessibles
  * - Fermeture par bouton [data-close-modal]
@@ -21,7 +22,7 @@ export class Modal {
 
     // Focus sur le premier champ interactif (confort clavier).
     const focusable = modal.querySelector('input, textarea, select, button:not(.modal-close-btn)');
-    if (focusable) setTimeout(() => { try { focusable.focus(); } catch {} }, 60);
+    if (focusable) setTimeout(() => { try { focusable.focus(); } catch (e) { logger.debug('App', 'Erreur focus modal:', e); } }, 60);
 
     Modal._ensureGlobalHandlers();
   }
@@ -32,7 +33,7 @@ export class Modal {
     Modal._openStack = Modal._openStack.filter(id => id !== modalId);
     if (Modal._openStack.length === 0) document.body.classList.remove('modal-open');
     if (Modal._lastFocused && typeof Modal._lastFocused.focus === 'function') {
-      try { Modal._lastFocused.focus(); } catch {}
+      try { Modal._lastFocused.focus(); } catch (e) { logger.debug('App', 'Erreur restore focus modal:', e); }
     }
   }
 

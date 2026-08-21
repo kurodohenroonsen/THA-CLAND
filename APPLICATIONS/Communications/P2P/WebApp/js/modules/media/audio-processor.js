@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 /**
  * Processeur Web Audio API & Détection d'Activité Vocale (VAD)
  * Analyse spectrale en temps réel, calcul du volume sonore et indicateur d'orateur actif.
@@ -36,7 +37,7 @@ export class AudioProcessor {
         this.evaluateSpeakingState();
       }, 100);
     } catch (err) {
-      console.warn('[AudioProcessor] Impossible d\'initialiser l\'analyseur audio:', err);
+      logger.warn('Media', '[AudioProcessor] Impossible d\'initialiser l\'analyseur audio:', err);
     }
   }
 
@@ -76,11 +77,11 @@ export class AudioProcessor {
       this.vadInterval = null;
     }
     if (this.source) {
-      try { this.source.disconnect(); } catch {}
+      try { this.source.disconnect(); } catch (e) { logger.debug('Media', 'Erreur source disconnect:', e); }
       this.source = null;
     }
     if (this.audioContext) {
-      try { this.audioContext.close(); } catch {}
+      try { this.audioContext.close(); } catch (e) { logger.debug('Media', 'Erreur audioContext close:', e); }
       this.audioContext = null;
     }
     this.isSpeaking = false;

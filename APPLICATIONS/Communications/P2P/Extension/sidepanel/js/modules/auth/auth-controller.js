@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 /**
  * Contrôleur d'Authentification & Onboarding Code Papier
  * Gestion de la saisie, de la génération de codes maîtres et de l'initialisation du coffre.
@@ -15,7 +16,7 @@ export class AuthController {
   }
 
   initUI() {
-    console.log('[Auth] 🖥️ Initialisation de l\'interface d\'authentification...');
+    logger.debug('Auth', '🖥️ Initialisation de l\'interface d\'authentification...');
     const btnGenerate = document.getElementById('btn-generate-code');
     const btnJoin = document.getElementById('btn-join-group');
     const inputCode = document.getElementById('input-paper-code');
@@ -41,7 +42,7 @@ export class AuthController {
     // 1. Bouton Générer un Nouveau Groupe
     if (btnGenerate) {
       btnGenerate.addEventListener('click', () => {
-        console.log('[Auth] 🖱️ Clic sur "Générer un Nouveau Groupe"');
+        logger.debug('Auth', '🖱️ Clic sur "Générer un Nouveau Groupe"');
         const newCode = CryptoVault.generatePaperCode();
         if (inputCode) { inputCode.value = newCode; inputCode.type = 'text'; }
         if (btnReveal) btnReveal.textContent = '🙈';
@@ -57,7 +58,7 @@ export class AuthController {
       btnCopyCode.addEventListener('click', async () => {
         const code = displayCode.textContent;
         if (!code) return;
-        try { await navigator.clipboard.writeText(code); } catch {}
+        try { await navigator.clipboard.writeText(code); } catch (err) { logger.warn('Auth', 'Presse-papier non accessible:', err); }
         const original = btnCopyCode.textContent;
         btnCopyCode.textContent = '✓ Copié !';
         btnCopyCode.classList.add('copied-flash');
@@ -71,10 +72,10 @@ export class AuthController {
         const code = inputCode ? inputCode.value.trim() : '';
         const name = inputName ? inputName.value.trim() : 'Membre P2P';
 
-        console.log(`[Auth] 🖱️ Clic sur "Rejoindre le Groupe" avec Code: "${code}", Nom: "${name}"`);
+        logger.info('Auth', `🖱️ Clic sur "Rejoindre le Groupe" (Nom: "${name}")`);
 
         if (!code) {
-          console.warn('[Auth] ⚠️ Tentative de connexion sans code papier.');
+          logger.warn('Auth', '⚠️ Tentative de connexion sans code papier.');
           Toast.error('Veuillez renseigner votre code papier.');
           return;
         }
@@ -84,22 +85,22 @@ export class AuthController {
           btnJoin.innerHTML = '<span class="spinner"></span> Dérivation cryptographique...';
 
           // Dérivation PBKDF2 / HKDF des clés E2EE locales
-          console.log('[Auth] ⏳ Appel de CryptoVault.initializeFromPaperCode...');
+          logger.debug('Auth', '⏳ Appel de CryptoVault.initializeFromPaperCode...');
           await this.vault.initializeFromPaperCode(code, name || 'Membre P2P');
 
           // Sauvegarde de la session locale
-          console.log('[Auth] 💾 Enregistrement de la session dans IndexedDB...');
+          logger.debug('Auth', '💾 Enregistrement de la session dans IndexedDB...');
           await dbManager.saveSetting('last_paper_code', code);
           await dbManager.saveSetting('user_name', name || 'Membre P2P');
 
           Toast.success(`Bienvenue ${name} ! Connexion au maillage P2P...`);
           
           if (this.onAuthenticated) {
-            console.log('[Auth] 🚀 Déclenchement du callback onAuthenticated !');
+            logger.info('Auth', '🚀 Déclenchement du callback onAuthenticated !');
             this.onAuthenticated(this.vault);
           }
         } catch (err) {
-          console.error('[Auth] ❌ Erreur critique lors de l\'authentification:', err);
+          logger.error('Auth', '❌ Erreur critique lors de l\'authentification:', err);
           Toast.error(`Erreur d'initialisation : ${err.message}`);
           btnJoin.disabled = false;
           btnJoin.innerHTML = 'Rejoindre le Groupe';
@@ -137,19 +138,19 @@ export class AuthController {
    * Vérifie si une session précédente existe pour reconnexion automatique
    */
   async checkSavedSession() {
-    console.log('[Auth] 🔍 Recherche d\'une session précédente enregistrée...');
+    logger.debug('Auth', '🔍 Recherche d\'une session précédente enregistrée...');
     const savedCode = await dbManager.getSetting('last_paper_code');
     const savedName = await dbManager.getSetting('user_name', 'Membre P2P');
 
     if (savedCode) {
-      console.log('[Auth] 🔄 Session précédente retrouvée:', savedCode, savedName);
+      logger.info('Auth', `🔄 Session précédente retrouvée pour "${savedName}"`);
       const inputCode = document.getElementById('input-paper-code');
       const inputName = document.getElementById('input-user-name');
       if (inputCode) inputCode.value = savedCode;
       if (inputName) inputName.value = savedName;
       this.updateEntropyMeter(savedCode);
     } else {
-      console.log('[Auth] ℹ️ Aucune session précédente trouvée.');
+      logger.debug('Auth', 'ℹ️ Aucune session précédente trouvée.');
     }
   }
 }

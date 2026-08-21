@@ -31,7 +31,7 @@
   
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-muted: #8fa0b5; /* WCAG 2.2 AA Conforme (>=4.5:1 sur fond sombre) */
   --text-highlight: #38bdf8;
 
   /* Bordures & Ombres */
@@ -53,4 +53,8 @@
   --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Accessibilité & Focus Clavier */
+  --focus-ring: 0 0 0 2px rgba(6, 182, 212, 0.6);
+  --focus-outline: 2px solid var(--accent-cyan);
 }

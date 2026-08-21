@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 /**
  * Contrôleur de Forum Thématique & Discussions Arborescentes
  * Gestion des sujets, catégories, réponses imbriquées et réplication P2P.

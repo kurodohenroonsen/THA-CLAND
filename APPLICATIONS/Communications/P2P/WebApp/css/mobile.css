@@ -115,3 +115,55 @@ body {
     -webkit-user-select: text;
   }
 }
+
+/* --- Tablettes & Grands Écrans / Desktop / Ultrawide (> 768px, > 1024px, > 1440px) --- */
+@media (min-width: 768px) {
+  /* Onboarding centré et borné pour une lecture confortable */
+  .auth-wrapper {
+    max-width: 480px;
+    margin: 40px auto;
+    width: 100%;
+  }
+
+  /* Chat : bulles avec largeur maximale élégante */
+  .chat-bubble {
+    max-width: 72% !important;
+  }
+
+  /* Forum : présentation des sujets en grille sur tablette/desktop */
+  .forum-threads-scroll {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+    padding: 14px;
+  }
+
+  /* Drive : présentation en grille des fichiers */
+  .drive-files-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 10px;
+  }
+
+  /* Salons Vidéo : mosaïque fluide adaptative */
+  .media-video-grid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)) !important;
+    gap: 14px;
+    padding: 14px;
+  }
+}
+
+@media (min-width: 1440px) {
+  /* Ultrawide : conteneur maître centré avec bordures subtiles */
+  #app-container {
+    max-width: 1560px;
+    margin: 0 auto;
+    border-left: 1px solid var(--border-subtle);
+    border-right: 1px solid var(--border-subtle);
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
+  }
+
+  .chat-bubble {
+    max-width: 60% !important;
+  }
+}

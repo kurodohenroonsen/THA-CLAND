@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 /**
  * Gestionnaire de Transfert en Essaim (Swarm Downloader) & Auto-Réplication P2P
  * Téléchargement multi-sources type BitTorrent : inventaire d'availability,
@@ -70,7 +71,7 @@ export class DriveTransferManager {
         case 'CHUNK_REQ': {
           const chunkData = await dbManager.getChunk(message.hash);
           if (chunkData) {
-            console.log(`[DriveTransfer] 📤 Envoi du bloc ${String(message.hash).substring(0, 10)}... vers ${peerId}`);
+            logger.debug('Drive', `[Transfer] 📤 Envoi du bloc ${String(message.hash).substring(0, 10)}... vers ${peerId}`);
             await this.mesh.sendBinaryChunkSliced(peerId, message.hash, chunkData);
           }
           break;
@@ -158,7 +159,7 @@ export class DriveTransferManager {
         totalSlices < 1 || totalSlices > L.MAX_BINARY_SLICES ||
         sliceIdx >= totalSlices ||
         totalChunkSize < 1 || totalChunkSize > L.MAX_BINARY_CHUNK_BYTES) {
-      console.warn(`[DriveTransfer] ⛔ En-tête de tranche invalide rejeté (slices=${totalSlices}, size=${totalChunkSize})`);
+      logger.warn('Drive', `[Transfer] En-tête de tranche invalide rejeté (slices=${totalSlices}, size=${totalChunkSize})`);
       return;
     }
 
@@ -210,7 +211,7 @@ export class DriveTransferManager {
     // Vérification cryptographique de l'intégrité SHA-256 (le contenu est lié au hash).
     const computedHash = await CryptoVault.hashSHA256(arrayBuffer);
     if (computedHash !== hash) {
-      console.warn(`[DriveTransfer] ⛔ Bloc corrompu rejeté (${hash} != ${computedHash})`);
+      logger.warn('Drive', `[Transfer] Bloc corrompu rejeté (${hash} != ${computedHash})`);
       // Re-planifie le bloc auprès d'un autre fournisseur.
       this.activeDownloads.forEach((dl) => {
         if (dl.inFlight.has(hash)) {
@@ -222,7 +223,7 @@ export class DriveTransferManager {
     }
 
     await dbManager.saveChunk(hash, arrayBuffer);
-    console.log(`[DriveTransfer] 💾 Bloc vérifié et stocké: ${hash.substring(0, 10)}... (${arrayBuffer.byteLength} octets)`);
+    logger.debug('Drive', `[Transfer] 💾 Bloc vérifié et stocké: ${hash.substring(0, 10)}... (${arrayBuffer.byteLength} octets)`);
 
     this.activeDownloads.forEach((dl) => {
       if (dl.missingHashes.has(hash)) {
@@ -234,7 +235,7 @@ export class DriveTransferManager {
         if (dl.onProgress) dl.onProgress(percent);
 
         if (dl.missingHashes.size === 0) {
-          console.log(`%c[DriveTransfer] ✅ Tous les blocs reçus pour ${dl.commit.fileName} !`, 'color: #10b981; font-weight: bold;');
+          logger.info('Drive', `[Transfer] ✅ Tous les blocs reçus pour ${dl.commit.fileName} !`);
           this.completeDownload(dl.commit.fileId);
         } else {
           this._scheduleRequests(dl); // libère un slot -> planifie le suivant
@@ -392,12 +393,12 @@ export class DriveTransferManager {
       return;
     }
 
-    console.log(`%c[DriveTransfer] 🔄 Auto-réplication swarm pour "${commit.fileName}" (${missing.length}/${commit.chunks.length} blocs manquants)...`, 'color: #8b5cf6;');
+    logger.info('Drive', `[Transfer] 🔄 Auto-réplication swarm pour "${commit.fileName}" (${missing.length}/${commit.chunks.length} blocs manquants)...`);
     try {
       await this.downloadFile(commit, () => {});
-      console.log(`%c[DriveTransfer] 🌟 "${commit.fileName}" entièrement répliqué ! Seeding actif.`, 'color: #10b981; font-weight: bold;');
+      logger.info('Drive', `[Transfer] 🌟 "${commit.fileName}" entièrement répliqué ! Seeding actif.`);
     } catch (err) {
-      console.warn(`[DriveTransfer] ⚠️ Auto-réplication partielle pour "${commit.fileName}":`, err.message);
+      logger.warn('Drive', `[Transfer] Auto-réplication partielle pour "${commit.fileName}":`, err.message);
     } finally {
       this.autoReplicatingFiles.delete(commit.fileId);
     }

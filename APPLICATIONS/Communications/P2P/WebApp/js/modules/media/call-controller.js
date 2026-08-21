@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 /**
  * Contrôleur des Appels Vocaux & Vidéo Mesh P2P
  * Mosaïque vidéo dynamique, détection vocale temps réel (VAD), renégociation fluide de la caméra et affichage de tous les pairs connectés.
@@ -31,7 +32,7 @@ export class CallController {
   }
 
   initUI() {
-    console.log('[Media] 🎙️ Initialisation du contrôleur d\'appels audio/vidéo...');
+    logger.debug('Media', '🎙️ Initialisation du contrôleur d\'appels audio/vidéo...');
     this.videoGrid = document.getElementById('media-video-grid');
     this.canvasVisualizer = document.getElementById('audio-visualizer-canvas');
     this.visualizerBox = document.querySelector('.audio-visualizer-box');
@@ -50,42 +51,42 @@ export class CallController {
 
     if (this.btnPerms) {
       this.btnPerms.addEventListener('click', () => {
-        console.log('[Media] 🖱️ Clic sur "Autorisations Micro / Caméra"');
+        logger.info('Media', '🖱️ Clic sur "Autorisations Micro / Caméra"');
         this.mediaManager.openPermissionHelper();
       });
     }
 
     if (this.btnJoinAudio) {
       this.btnJoinAudio.addEventListener('click', () => {
-        console.log('[Media] 🖱️ Clic sur "Rejoindre le Salon"');
+        logger.info('Media', '🖱️ Clic sur "Rejoindre le Salon"');
         this.handleJoinVoiceRoom();
       });
     }
 
     if (this.btnToggleCam) {
       this.btnToggleCam.addEventListener('click', () => {
-        console.log('[Media] 🖱️ Clic sur "Activer/Couper Caméra"');
+        logger.info('Media', '🖱️ Clic sur "Activer/Couper Caméra"');
         this.handleToggleCamera();
       });
     }
 
     if (this.btnToggleMic) {
       this.btnToggleMic.addEventListener('click', () => {
-        console.log('[Media] 🖱️ Clic sur "Mute/Unmute Micro"');
+        logger.info('Media', '🖱️ Clic sur "Mute/Unmute Micro"');
         this.handleToggleMute();
       });
     }
 
     if (this.btnScreenShare) {
       this.btnScreenShare.addEventListener('click', () => {
-        console.log('[Media] 🖱️ Clic sur "Partage d\'écran"');
+        logger.debug('Media', '🖱️ Clic sur "Partage d\'écran"');
         this.handleToggleScreenShare();
       });
     }
 
     if (this.btnLeaveCall) {
       this.btnLeaveCall.addEventListener('click', () => {
-        console.log('[Media] 🖱️ Clic sur "Quitter le Salon"');
+        logger.info('Media', '🖱️ Clic sur "Quitter le Salon"');
         this.leaveCall();
       });
     }
@@ -94,7 +95,7 @@ export class CallController {
   initListeners() {
     // 1. Réception d'un flux média WebRTC distant
     this.mesh.on('track-received', ({ peerId, track, streams }) => {
-      console.log(`%c[Media] 🎥 Piste distante [Kind: ${track.kind}, ID: ${track.id}] reçue du pair ${peerId}`, 'color: #ec4899; font-weight: bold;');
+      logger.info('Media', `🎥 Piste distante [Kind: ${track.kind}, ID: ${track.id}] reçue du pair ${peerId}`);
       
       let stream = streams[0];
       if (!stream) {
@@ -113,7 +114,7 @@ export class CallController {
     // 2. Départ d'un pair
     this.mesh.on('peer-left', ({ peerId }) => {
       if (this.remoteVideoStreams.has(peerId)) {
-        console.log(`[Media] ➖ Retrait du flux média pour le pair déconnecté ${peerId}`);
+        logger.info('Media', `➖ Retrait du flux média pour le pair déconnecté ${peerId}`);
         this.remoteVideoStreams.delete(peerId);
       }
       this.updateVideoGrid();
@@ -129,16 +130,16 @@ export class CallController {
     if (this.isInCall) return;
 
     try {
-      console.log('[Media] 🎙️ Demande d\'accès au microphone...');
+      logger.debug('Media', '🎙️ Demande d\'accès au microphone...');
       Toast.info('Activation du microphone...');
       const audioStream = await this.mediaManager.getAudioStream();
 
       // Injection dans le réseau P2P maillé avec renégociation automatique
-      console.log('[Media] 🌐 Injection du flux audio dans le maillage WebRTC...');
+      logger.info('Media', '🌐 Injection du flux audio dans le maillage WebRTC...');
       await this.mesh.attachLocalMediaStream(audioStream);
 
       // Démarrage de l'analyse spectrale et de la détection vocale VAD
-      console.log('[Media] 📊 Démarrage de l\'analyseur Web Audio et du VAD...');
+      logger.debug('Media', '📊 Démarrage de l\'analyseur Web Audio et du VAD...');
       this.audioProcessor.start(audioStream, (isSpeaking, level) => {
         const localTile = document.getElementById('video-tile-self');
         if (localTile) {
@@ -160,10 +161,10 @@ export class CallController {
 
       this.updateCallUI();
       this.updateVideoGrid();
-      console.log('%c[Media] ✅ SALON VOCAL P2P REJOINT AVEC SUCCÈS !', 'color: #10b981; font-weight: bold;');
+      logger.info('Media', '✅ SALON VOCAL P2P REJOINT AVEC SUCCÈS !');
       Toast.success('Vous avez rejoint le salon vocal P2P !');
     } catch (err) {
-      console.error('[Media] ❌ Erreur accès audio:', err);
+      logger.error('Media', 'Erreur accès audio:', err);
       Toast.error(err.message || 'Impossible de rejoindre le salon vocal.');
     }
   }
@@ -175,7 +176,7 @@ export class CallController {
     }
 
     if (this.isVideoActive) {
-      console.log('[Media] 📷 Désactivation de la caméra (arrêt réel du périphérique)');
+      logger.info('Media', '📷 Désactivation de la caméra (arrêt réel du périphérique)');
       // Coupe VRAIMENT la caméra (voyant éteint) et retire la piste des pairs.
       this.mediaManager.stopVideoTrack();
       await this.mesh.detachVideoTracks();
@@ -184,17 +185,17 @@ export class CallController {
       this.btnToggleCam.innerHTML = '📷 Caméra';
     } else {
       try {
-        console.log('[Media] 📷 Demande d\'accès à la caméra...');
+        logger.debug('Media', '📷 Demande d\'accès à la caméra...');
         Toast.info('Activation de la caméra...');
         const videoStream = await this.mediaManager.getVideoStream();
         await this.mesh.attachLocalMediaStream(videoStream);
         this.isVideoActive = true;
         this.btnToggleCam.classList.add('active');
         this.btnToggleCam.innerHTML = '📷 Couper Cam';
-        console.log('%c[Media] ✅ Caméra active et injectée dans le maillage !', 'color: #10b981;');
+        logger.info('Media', '✅ Caméra active et injectée dans le maillage !');
         Toast.success('Caméra activée !');
       } catch (err) {
-        console.error('[Media] ❌ Erreur caméra:', err);
+        logger.error('Media', 'Erreur caméra:', err);
         Toast.error(err.message || 'Impossible d\'activer la caméra.');
       }
     }
@@ -206,7 +207,7 @@ export class CallController {
   handleToggleMute() {
     if (!this.isInCall) return;
     this.isMuted = this.mediaManager.toggleAudioMute();
-    console.log(`[Media] 🔇 Statut micro basculé: ${this.isMuted ? 'MUET' : 'ACTIF'}`);
+    logger.info('Media', `🔇 Statut micro basculé: ${this.isMuted ? 'MUET' : 'ACTIF'}`);
 
     if (this.isMuted) {
       this.btnToggleMic.classList.add('muted');
@@ -226,7 +227,7 @@ export class CallController {
     if (!this.isInCall) return;
 
     if (this.isScreenSharing) {
-      console.log('[Media] 🖥️ Arrêt du partage d\'écran');
+      logger.info('Media', '🖥️ Arrêt du partage d\'écran');
       if (this.mediaManager.screenStream) {
         this.mediaManager.screenStream.getTracks().forEach(t => t.stop());
       }
@@ -235,14 +236,14 @@ export class CallController {
       this.updateVideoGrid();
     } else {
       try {
-        console.log('[Media] 🖥️ Demande de capture d\'écran (getDisplayMedia)...');
+        logger.debug('Media', '🖥️ Demande de capture d\'écran (getDisplayMedia)...');
         const screenStream = await this.mediaManager.getScreenStream();
         await this.mesh.attachLocalMediaStream(screenStream);
         this.isScreenSharing = true;
         this.btnScreenShare.classList.add('active');
 
         screenStream.getVideoTracks()[0].onended = () => {
-          console.log('[Media] 🖥️ Fin du partage d\'écran déclenché par l\'OS');
+          logger.info('Media', '🖥️ Fin du partage d\'écran déclenché par l\'OS');
           this.isScreenSharing = false;
           this.btnScreenShare.classList.remove('active');
           this.updateVideoGrid();
@@ -251,7 +252,7 @@ export class CallController {
         this.updateVideoGrid();
         Toast.success('Partage d\'écran actif.');
       } catch (err) {
-        console.warn('[Media] ⚠️ Partage écran annulé:', err);
+        logger.warn('Media', 'Partage écran annulé:', err);
       }
     }
   }
@@ -259,7 +260,7 @@ export class CallController {
   leaveCall() {
     if (!this.isInCall) return;
 
-    console.log('[Media] ⏹️ Quitter le salon : Libération des pistes audio/vidéo et arrêt de l\'analyseur');
+    logger.info('Media', '⏹️ Quitter le salon : Libération des pistes audio/vidéo et arrêt de l\'analyseur');
     this.audioProcessor.stop();
     if (this.visualizer) this.visualizer.stop();
     this.stopBitrateAdaptation();

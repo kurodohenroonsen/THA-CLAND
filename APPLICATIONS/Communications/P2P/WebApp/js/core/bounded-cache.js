@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 /**
  * Structures bornées anti-fuite-mémoire & anti-rejeu.
  *
@@ -77,7 +78,7 @@ export class TTLMap {
     const entry = this._map.get(key);
     this._map.delete(key);
     if (entry && this.onEvict) {
-      try { this.onEvict(key, entry.value); } catch {}
+      try { this.onEvict(key, entry.value); } catch (err) { logger.warn('Cache', 'Erreur callback onEvict:', err); }
     }
   }
 

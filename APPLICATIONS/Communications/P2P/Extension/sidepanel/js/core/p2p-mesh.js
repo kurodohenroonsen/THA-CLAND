@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 /**
  * Moteur Réseau P2P Mesh & Coordinateur de Swarm Décentralisé
  * Signalement multi-canaux, négociation WebRTC audio/vidéo avec transceivers et renégociation in-band ultra-rapide.
@@ -20,7 +21,7 @@ export class P2PMeshNetwork {
       maxSize: 256,
       ttlMs: CONFIG.TIMINGS.OFFER_TTL || 45000,
       onEvict: (offerId, entry) => {
-        try { entry?.pc?.close(); } catch {}
+        try { entry?.pc?.close(); } catch (e) { logger.debug('P2P Mesh', 'Erreur fermeture RTCPeerConnection:', e); }
       }
     });
     // Anti-doublon / anti-rejeu des offres traitées : ensemble borné (FIFO).
@@ -43,7 +44,7 @@ export class P2PMeshNetwork {
   emit(event, data) {
     if (this.eventListeners.has(event)) {
       this.eventListeners.get(event).forEach(cb => {
-        try { cb(data); } catch (e) { console.error(`[P2P Mesh] Erreur écouteur ${event}:`, e); }
+        try { cb(data); } catch (e) { logger.error('P2P Mesh', `Erreur écouteur ${event}:`, e); }
       });
     }
   }
@@ -56,24 +57,24 @@ export class P2PMeshNetwork {
       throw new Error('Le coffre cryptographique doit être initialisé');
     }
 
-    console.log(`%c[P2P Mesh] 🚀 Démarrage du réseau Mesh pour Topic: ${this.vault.topicHex.substring(0, 10)}... (Pair local: ${this.vault.peerIdHex.substring(0, 12)}...)`, 'color: #8b5cf6; font-weight: bold;');
+    logger.info('P2P Mesh', `🚀 Démarrage du réseau Mesh pour Topic: ${this.vault.topicHex.substring(0, 10)}... (Pair local: ${this.vault.peerIdHex.substring(0, 12)}...)`);
     this.emit('status-change', { status: 'connecting', message: 'Connexion aux relais de découverte...' });
 
     // 1. Connexion aux trackers WebTorrent WSS
     for (const trackerUrl of CONFIG.TRACKERS) {
-      console.log(`[P2P Mesh] 🌐 Connexion au tracker WebTorrent: ${trackerUrl}`);
+      logger.info('P2P Mesh', `🌐 Connexion au tracker WebTorrent: ${trackerUrl}`);
       this.connectToTracker(trackerUrl);
     }
 
     // 2. Connexion aux relais Nostr (Signalement décentralisé complémentaire)
     for (const nostrUrl of (CONFIG.NOSTR_RELAYS || [])) {
-      console.log(`[P2P Mesh] ⚡ Connexion au relais Nostr: ${nostrUrl}`);
+      logger.info('P2P Mesh', `⚡ Connexion au relais Nostr: ${nostrUrl}`);
       this.connectToNostrRelay(nostrUrl);
     }
 
     // Boucle d'annonce périodique toutes les 15 secondes
     this.announceInterval = setInterval(() => {
-      console.log('[P2P Mesh] 🔄 Déclenchement de l\'annonce périodique sur les trackers...');
+      logger.debug('P2P Mesh', '🔄 Déclenchement de l\'annonce périodique sur les trackers...');
       this.announceAllTrackers();
     }, 15000);
 
@@ -89,7 +90,7 @@ export class P2PMeshNetwork {
    * Arrête toutes les connexions
    */
   stop() {
-    console.log('[P2P Mesh] 🛑 Arrêt du maillage P2P et libération des ressources...');
+    logger.info('P2P Mesh', '🛑 Arrêt du maillage P2P et libération des ressources...');
     if (this.announceInterval) {
       clearInterval(this.announceInterval);
       this.announceInterval = null;
@@ -100,17 +101,17 @@ export class P2PMeshNetwork {
     }
 
     this.trackers.forEach((ws) => {
-      try { ws.close(); } catch {}
+      try { ws.close(); } catch (e) { logger.debug('P2P Mesh', 'Erreur fermeture WebSocket:', e); }
     });
     this.trackers.clear();
 
     this.nostrRelays.forEach((ws) => {
-      try { ws.close(); } catch {}
+      try { ws.close(); } catch (e) { logger.debug('P2P Mesh', 'Erreur fermeture WebSocket:', e); }
     });
     this.nostrRelays.clear();
 
     this.peers.forEach((peer) => {
-      try { peer.connection.close(); } catch {}
+      try { peer.connection.close(); } catch (e) { logger.debug('P2P Mesh', 'Erreur fermeture connexion pair:', e); }
     });
     this.peers.clear();
 
@@ -148,7 +149,7 @@ export class P2PMeshNetwork {
       this.trackers.set(trackerUrl, ws);
 
       ws.onopen = () => {
-        console.log(`%c[P2P Mesh] ✅ Connecté au tracker: ${trackerUrl}`, 'color: #10b981;');
+        logger.info('P2P Mesh', `✅ Connecté au tracker: ${trackerUrl}`);
         this.announceToTracker(ws, trackerUrl, 'started');
       };
 
@@ -157,26 +158,26 @@ export class P2PMeshNetwork {
           const data = JSON.parse(event.data);
           await this.handleTrackerMessage(data, ws);
         } catch (err) {
-          console.warn('[P2P Mesh] ⚠️ Erreur lecture message tracker:', err);
+          logger.warn('P2P Mesh', 'Erreur lecture message tracker:', err);
         }
       };
 
       ws.onerror = () => {
-        console.warn(`[P2P Mesh] ❌ Erreur sur le tracker ${trackerUrl}`);
+        logger.warn('P2P Mesh', `Erreur sur le tracker ${trackerUrl}`);
       };
 
       ws.onclose = () => {
-        console.log(`[P2P Mesh] 🔌 Connexion fermée avec tracker ${trackerUrl}`);
+        logger.info('P2P Mesh', `🔌 Connexion fermée avec tracker ${trackerUrl}`);
         this.trackers.delete(trackerUrl);
         setTimeout(() => {
           if (this.announceInterval) {
-            console.log(`[P2P Mesh] 🔄 Reconnexion au tracker: ${trackerUrl}`);
+            logger.info('P2P Mesh', `🔄 Reconnexion au tracker: ${trackerUrl}`);
             this.connectToTracker(trackerUrl);
           }
         }, CONFIG.TIMINGS.RECONNECT_DELAY);
       };
     } catch (e) {
-      console.warn(`[P2P Mesh] ❌ Impossible de joindre le tracker ${trackerUrl}:`, e);
+      logger.warn('P2P Mesh', `❌ Impossible de joindre le tracker ${trackerUrl}:`, e);
     }
   }
 
@@ -194,7 +195,7 @@ export class P2PMeshNetwork {
   async announceToTracker(ws, trackerUrl, eventType = 'update') {
     if (ws.readyState !== WebSocket.OPEN) return;
 
-    console.log(`[P2P Mesh] 📡 Préparation de l'annonce sur ${trackerUrl}...`);
+    logger.info('P2P Mesh', `📡 Préparation de l'annonce sur ${trackerUrl}...`);
 
     const offers = [];
     const NUM_OFFERS = 2;
@@ -245,7 +246,7 @@ export class P2PMeshNetwork {
       offers: offers
     };
 
-    console.log(`[P2P Mesh] 📤 Envoi announce (${offers.length} offres chiffrées avec ICE complets) vers ${trackerUrl}`);
+    logger.info('P2P Mesh', `📤 Envoi announce (${offers.length} offres chiffrées avec ICE complets) vers ${trackerUrl}`);
     ws.send(JSON.stringify(announceMsg));
   }
 
@@ -269,14 +270,15 @@ export class P2PMeshNetwork {
       if (data.offer && data.offer_id) {
         if (!this.processedOfferIds.addIfNew(data.offer_id)) return;
 
-        console.log(`%c[P2P Mesh] 🤝 Offre WebRTC entrante de ${remotePeerId} [OfferID: ${data.offer_id}] !`, 'color: #06b6d4; font-weight: bold;');
+        logger.info('P2P Mesh', `🤝 Offre WebRTC entrante de ${remotePeerId} [OfferID: ${data.offer_id}] !`);
 
         try {
           let cipherPayload = data.offer;
           if (data.offer && typeof data.offer === 'object' && data.offer.sdp) {
             try {
               cipherPayload = JSON.parse(data.offer.sdp);
-            } catch {
+            } catch (e) {
+              logger.debug('P2P Mesh', 'SDP offer non JSON, format chaîne brute conservé');
               cipherPayload = data.offer.sdp;
             }
           }
@@ -286,7 +288,7 @@ export class P2PMeshNetwork {
             throw new Error('SDP manquant dans l\'offre déchiffrée');
           }
 
-          console.log('[P2P Mesh] 🔓 Offre SDP déchiffrée avec succès ! Création de la réponse WebRTC...');
+          logger.info('P2P Mesh', '🔓 Offre SDP déchiffrée avec succès ! Création de la réponse WebRTC...');
           const pc = this.createPeerConnection(remotePeerId);
 
           await pc.setRemoteDescription(new RTCSessionDescription({
@@ -315,16 +317,16 @@ export class P2PMeshNetwork {
             offer_id: data.offer_id
           };
 
-          console.log(`[P2P Mesh] 📤 Envoi de la réponse SDP chiffrée vers ${remotePeerId}...`);
+          logger.info('P2P Mesh', `📤 Envoi de la réponse SDP chiffrée vers ${remotePeerId}...`);
           ws.send(JSON.stringify(answerMsg));
         } catch (err) {
-          console.warn('[P2P Mesh] ⛔ Rejet offre reçue:', err.message);
+          logger.warn('P2P Mesh', 'Rejet offre reçue:', err.message);
         }
       }
 
       // 2. Réception d'une réponse à une offre existante
       if (data.answer && data.offer_id) {
-        console.log(`[P2P Mesh] 📥 Réponse SDP reçue pour l'offre ${data.offer_id}...`);
+        logger.info('P2P Mesh', `📥 Réponse SDP reçue pour l'offre ${data.offer_id}...`);
         const pending = this.activeOffers.get(data.offer_id);
         if (pending && pending.pc) {
           try {
@@ -332,13 +334,14 @@ export class P2PMeshNetwork {
             if (data.answer && typeof data.answer === 'object' && data.answer.sdp) {
               try {
                 cipherAnswerPayload = JSON.parse(data.answer.sdp);
-              } catch {
+              } catch (e) {
+                logger.debug('P2P Mesh', 'SDP answer non JSON, format chaîne brute conservé');
                 cipherAnswerPayload = data.answer.sdp;
               }
             }
 
             const decryptedAnswer = await this.vault.decrypt(cipherAnswerPayload, true);
-            console.log(`%c[P2P Mesh] 🔓 Réponse SDP déchiffrée ! Application de la description distante...`, 'color: #10b981;');
+            logger.info('P2P Mesh', `🔓 Réponse SDP déchiffrée ! Application de la description distante...`);
             // Lie désormais la connexion au pair identifié (corrige track-received=null).
             pending.pc._remotePeerId = remotePeerId;
             await pending.pc.setRemoteDescription(new RTCSessionDescription({
@@ -349,7 +352,7 @@ export class P2PMeshNetwork {
             this.setupConnectedPeer(remotePeerId, pending.pc, pending.controlChannel, pending.dataChannel);
             this.activeOffers.delete(data.offer_id);
           } catch (err) {
-            console.warn('[P2P Mesh] ❌ Échec traitement réponse SDP:', err.message);
+            logger.warn('P2P Mesh', '❌ Échec traitement réponse SDP:', err.message);
           }
         }
       }
@@ -364,7 +367,7 @@ export class P2PMeshNetwork {
       this.nostrRelays.set(relayUrl, ws);
 
       ws.onopen = () => {
-        console.log(`%c[P2P Mesh] ⚡ Connecté au relais Nostr: ${relayUrl}`, 'color: #f59e0b;');
+        logger.info('P2P Mesh', `⚡ Connecté au relais Nostr: ${relayUrl}`);
         const subId = `sub_${Math.random().toString(36).substr(2, 6)}`;
         const req = ['REQ', subId, {
           kinds: [29000],
@@ -390,7 +393,7 @@ export class P2PMeshNetwork {
           // fier au champ pubkey (espace de clés Nostr distinct de notre clé ECDSA) :
           // on marque donc nos propres envois via un champ `_src` dans le contenu.
           let payload;
-          try { payload = JSON.parse(nostrEvent.content); } catch { return; }
+          try { payload = JSON.parse(nostrEvent.content); } catch (e) { logger.debug('P2P Mesh', 'Contenu Nostr non JSON, ignoré:', e); return; }
           if (!payload || payload.action !== 'announce') return;
           if (payload.peer_id && payload.peer_id === this.vault.peerIdHex.substring(0, 40)) return;
 
@@ -400,14 +403,18 @@ export class P2PMeshNetwork {
           // façon chiffrée E2EE avec la clé de signalement du groupe et échoue au
           // déchiffrement si elle est forgée. Nostr n'est qu'un canal de rendez-vous.
           await this.handleTrackerMessage(payload, ws);
-        } catch (e) {}
+        } catch (e) {
+          logger.warn('P2P Mesh', 'Erreur traitement événement Nostr:', e);
+        }
       };
 
-      ws.onerror = () => {};
+      ws.onerror = (err) => { logger.warn('P2P Mesh', `Erreur WebSocket relais Nostr (${relayUrl}):`, err); };
       ws.onclose = () => {
         this.nostrRelays.delete(relayUrl);
       };
-    } catch (e) {}
+    } catch (e) {
+      logger.warn('P2P Mesh', `Exception connexion relais Nostr (${relayUrl}):`, e);
+    }
   }
 
   // --- Gestion des Connexions WebRTC & Transceivers ---
@@ -437,7 +444,7 @@ export class P2PMeshNetwork {
     pc.ondatachannel = (event) => {
       const channel = event.channel;
       const pid = pc._remotePeerId;
-      console.log(`[P2P Mesh] 📦 Canal de données reçu du pair distant [${pid || 'nouveau'}]: "${channel.label}"`);
+      logger.info('P2P Mesh', `📦 Canal de données reçu du pair distant [${pid || 'nouveau'}]: "${channel.label}"`);
       if (channel.label === 'p2p-control') {
         controlChannel = channel;
         this.setupControlChannel(channel, pid);
@@ -453,7 +460,7 @@ export class P2PMeshNetwork {
 
     pc.ontrack = (event) => {
       const pid = pc._remotePeerId;
-      console.log(`%c[P2P Mesh] 🎥 Piste média reçue [Kind: ${event.track.kind}, TrackID: ${event.track.id}] de ${pid}`, 'color: #ec4899; font-weight: bold;');
+      logger.info('P2P Mesh', `🎥 Piste média reçue [Kind: ${event.track.kind}, TrackID: ${event.track.id}] de ${pid}`);
       this.emit('track-received', {
         peerId: pid,
         track: event.track,
@@ -463,9 +470,9 @@ export class P2PMeshNetwork {
 
     pc.oniceconnectionstatechange = () => {
       const pid = pc._remotePeerId;
-      console.log(`[P2P Mesh] 🌐 État ICE [${pid || 'nouveau'}] : ${pc.iceConnectionState}`);
+      logger.info('P2P Mesh', `🌐 État ICE [${pid || 'nouveau'}] : ${pc.iceConnectionState}`);
       if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-        console.log(`%c[P2P Mesh] 🌟 Connexion directe WebRTC P2P ÉTABLIE avec ${pid || 'pair distant'} !`, 'color: #10b981; font-weight: bold;');
+        logger.info('P2P Mesh', `🌟 Connexion directe WebRTC P2P ÉTABLIE avec ${pid || 'pair distant'} !`);
       } else if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
         if (pc._remotePeerId) this.removePeer(pc._remotePeerId);
       }
@@ -497,7 +504,7 @@ export class P2PMeshNetwork {
               !Number.isInteger(_total) || _total < 1 || _total > MAX_PARTS ||
               !Number.isInteger(_part) || _part < 0 || _part >= _total ||
               typeof _data !== 'string') {
-            console.warn(`[P2P Mesh] ⛔ Fragment invalide rejeté de ${peerId} (part=${_part}, total=${_total})`);
+            logger.warn('P2P Mesh', `Fragment invalide rejeté de ${peerId} (part=${_part}, total=${_total})`);
             return;
           }
 
@@ -517,7 +524,7 @@ export class P2PMeshNetwork {
             item.parts.set(_part, _data);
             item.bytes += _data.length;
             if (item.bytes > MAX_ASSEMBLED) {
-              console.warn(`[P2P Mesh] ⛔ Message fragmenté trop volumineux de ${peerId} — abandon`);
+              logger.warn('P2P Mesh', `Message fragmenté trop volumineux de ${peerId} — abandon`);
               incomingFragments.delete(_fragId);
               return;
             }
@@ -547,7 +554,7 @@ export class P2PMeshNetwork {
 
         this.emit('message-received', { peerId, message });
       } catch (e) {
-        console.warn(`[P2P Mesh] ⚠️ Message de contrôle indéchiffrable de ${peerId}:`, e.message);
+        logger.warn('P2P Mesh', `Message de contrôle indéchiffrable de ${peerId}:`, e.message);
       }
     };
   }
@@ -568,7 +575,7 @@ export class P2PMeshNetwork {
     if (peer._controlReady) return;    // anti double-déclenchement (onopen + fallback)
     peer._controlReady = true;
 
-    console.log(`%c[P2P Mesh] 🟢 Canal 'p2p-control' OUVERT avec ${peerId}`, 'color: #10b981; font-weight: bold;');
+    logger.info('P2P Mesh', `🟢 Canal 'p2p-control' OUVERT avec ${peerId}`);
 
     this.sendToPeer(peerId, {
       type: 'PEER_HELLO',
@@ -588,7 +595,7 @@ export class P2PMeshNetwork {
   setupDataChannel(channel, peerId) {
     channel.binaryType = 'arraybuffer';
     channel.onopen = () => {
-      console.log(`%c[P2P Mesh] 🟢 Canal binaire 'p2p-data' OUVERT avec ${peerId}`, 'color: #10b981;');
+      logger.info('P2P Mesh', `🟢 Canal binaire 'p2p-data' OUVERT avec ${peerId}`);
     };
 
     channel.onmessage = (event) => {
@@ -617,7 +624,7 @@ export class P2PMeshNetwork {
     };
 
     this.peers.set(peerId, peerData);
-    console.log(`%c[P2P Mesh] 🚀 PAIR ENREGISTRÉ DANS LE MAILLAGE : ${peerId} (Total: ${this.peers.size})`, 'background: #06b6d4; color: #000; font-weight: bold; padding: 2px 6px;');
+    logger.info('P2P Mesh', `🚀 PAIR ENREGISTRÉ DANS LE MAILLAGE : ${peerId} (Total: ${this.peers.size})`);
     
     this.emit('peer-joined', peerData);
     this.emit('status-change', {
@@ -638,9 +645,9 @@ export class P2PMeshNetwork {
     if (!peerId) return;
     const peer = this.peers.get(peerId);
     if (peer) {
-      try { peer.connection.close(); } catch {}
+      try { peer.connection.close(); } catch (e) { logger.debug('P2P Mesh', 'Erreur fermeture connexion pair:', e); }
       this.peers.delete(peerId);
-      console.log(`[P2P Mesh] 🔴 Pair retiré : ${peerId} (Restants: ${this.peers.size})`);
+      logger.info('P2P Mesh', `🔴 Pair retiré : ${peerId} (Restants: ${this.peers.size})`);
       this.emit('peer-left', { peerId, info: peer });
       this.emit('status-change', { 
         status: this.peers.size > 0 ? 'connected' : 'idle', 
@@ -657,7 +664,7 @@ export class P2PMeshNetwork {
     if (!peer || !peer.connection || !peer.controlChannel || peer.controlChannel.readyState !== 'open') return;
 
     try {
-      console.log(`[P2P Mesh] 🔄 Renégociation WebRTC in-band vers ${peerId}...`);
+      logger.info('P2P Mesh', `🔄 Renégociation WebRTC in-band vers ${peerId}...`);
       const offer = await peer.connection.createOffer();
       await peer.connection.setLocalDescription(offer);
       const completeOffer = await this.waitForIceGathering(peer.connection, 1500);
@@ -670,7 +677,7 @@ export class P2PMeshNetwork {
         }
       });
     } catch (e) {
-      console.warn(`[P2P Mesh] ⚠️ Échec renégociation vers ${peerId}:`, e);
+      logger.warn('P2P Mesh', `Échec renégociation vers ${peerId}:`, e);
     }
   }
 
@@ -679,7 +686,7 @@ export class P2PMeshNetwork {
     if (!peer || !peer.connection) return;
 
     try {
-      console.log(`[P2P Mesh] 📥 Traitement offre de renégociation média de ${peerId}...`);
+      logger.info('P2P Mesh', `📥 Traitement offre de renégociation média de ${peerId}...`);
       await peer.connection.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await peer.connection.createAnswer();
       await peer.connection.setLocalDescription(answer);
@@ -693,7 +700,7 @@ export class P2PMeshNetwork {
         }
       });
     } catch (e) {
-      console.warn(`[P2P Mesh] ⚠️ Erreur réponse renégociation ${peerId}:`, e);
+      logger.warn('P2P Mesh', `Erreur réponse renégociation ${peerId}:`, e);
     }
   }
 
@@ -702,10 +709,10 @@ export class P2PMeshNetwork {
     if (!peer || !peer.connection) return;
 
     try {
-      console.log(`%c[P2P Mesh] ✅ Renégociation média complétée avec succès avec ${peerId} !`, 'color: #10b981; font-weight: bold;');
+      logger.info('P2P Mesh', `✅ Renégociation média complétée avec succès avec ${peerId} !`);
       await peer.connection.setRemoteDescription(new RTCSessionDescription(answer));
     } catch (e) {
-      console.warn(`[P2P Mesh] ⚠️ Erreur finalisation renégociation ${peerId}:`, e);
+      logger.warn('P2P Mesh', `Erreur finalisation renégociation ${peerId}:`, e);
     }
   }
 
@@ -797,7 +804,7 @@ export class P2PMeshNetwork {
   // --- Gestion des Pistes Média (Audio/Vidéo) ---
 
   async attachLocalMediaStream(stream) {
-    console.log('[P2P Mesh] 🎙️ Injection du MediaStream local dans toutes les connexions Mesh...');
+    logger.info('P2P Mesh', '🎙️ Injection du MediaStream local dans toutes les connexions Mesh...');
     this.localMediaStream = stream;
 
     for (const [peerId, peer] of this.peers) {
@@ -851,7 +858,7 @@ export class P2PMeshNetwork {
       if (params.encodings[0].maxBitrate !== target) {
         params.encodings[0].maxBitrate = target;
         await sender.setParameters(params);
-        console.log(`[P2P Mesh] 🎚️ Bitrate vidéo vers ${peerId} ajusté à ${Math.round(target / 1000)} kbps (RTT ${rttMs} ms)`);
+        logger.info('P2P Mesh', `🎚️ Bitrate vidéo vers ${peerId} ajusté à ${Math.round(target / 1000)} kbps (RTT ${rttMs} ms)`);
       }
     } catch (e) {
       // Certains navigateurs limitent setParameters ; échec silencieux non bloquant.
@@ -860,14 +867,14 @@ export class P2PMeshNetwork {
 
   removeLocalMediaStream() {
     if (this.localMediaStream) {
-      console.log('[P2P Mesh] ⏹️ Arrêt du MediaStream local');
+      logger.info('P2P Mesh', '⏹️ Arrêt du MediaStream local');
       this.localMediaStream.getTracks().forEach(t => t.stop());
       this.localMediaStream = null;
     }
     this.peers.forEach((peer) => {
       if (peer.connection) {
         peer.connection.getSenders().forEach(sender => {
-          try { sender.replaceTrack(null); } catch {}
+          try { sender.replaceTrack(null); } catch (e) { logger.warn('P2P Mesh', 'Erreur replaceTrack null:', e); }
         });
       }
     });
@@ -885,10 +892,10 @@ export class P2PMeshNetwork {
       let changed = false;
       peer.connection.getSenders().forEach(sender => {
         if (sender.track && sender.track.kind === 'video') {
-          try { sender.replaceTrack(null); changed = true; } catch {}
+          try { sender.replaceTrack(null); changed = true; } catch (e) { logger.warn('P2P Mesh', `Erreur replaceTrack sur pair ${peerId}:`, e); }
         }
       });
-      if (changed) { try { await this.renegotiatePeer(peerId); } catch {} }
+      if (changed) { try { await this.renegotiatePeer(peerId); } catch (e) { logger.warn('P2P Mesh', `Erreur renégociation pair ${peerId}:`, e); } }
     }
   }
 }

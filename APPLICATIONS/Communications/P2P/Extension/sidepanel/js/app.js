@@ -1,8 +1,9 @@
 /**
- * Application Principale - P2P Mesh Workspace (Chrome Side Panel)
- * Orchestration globale des modules, navigation par onglets et gestion des statuts.
+ * Application Principale - P2P Mesh Workspace (Chrome Side Panel & Web App PWA)
+ * Orchestration globale des modules, navigation par onglets, diagnostic et gestion des statuts.
  */
 
+import { logger } from './core/logger.js';
 import { CryptoVault } from './core/crypto-vault.js';
 import { dbManager } from './core/local-storage.js';
 import { P2PMeshNetwork } from './core/p2p-mesh.js';
@@ -33,35 +34,37 @@ class P2PApp {
   }
 
   async init() {
-    console.log('%c[App] 🌟 Démarrage de P2P Mesh Workspace...', 'color: #06b6d4; font-size: 14px; font-weight: bold;');
+    // 0. Installation des gestionnaires d'erreurs globaux
+    logger.installGlobalHandlers();
+    logger.info('App', '🌟 Démarrage de P2P Mesh Workspace...');
 
     // 1. Initialisation du stockage persistant IndexedDB & OPFS
-    console.log('[App] 📦 Étape 1 : Initialisation de la base locale IndexedDB...');
+    logger.debug('App', '📦 Étape 1 : Initialisation de la base locale IndexedDB & OPFS...');
     await dbManager.init();
 
     // 2. Configuration des modales
-    console.log('[App] 🪟 Étape 2 : Configuration des déclencheurs de modales...');
+    logger.debug('App', '🪟 Étape 2 : Configuration des déclencheurs de modales...');
     Modal.setupCloseTriggers();
 
     // 3. Initialisation de l'authentification
-    console.log('[App] 🔑 Étape 3 : Initialisation du contrôleur d\'authentification...');
+    logger.debug('App', '🔑 Étape 3 : Initialisation du contrôleur d\'authentification...');
     this.authController = new AuthController(this.vault, (initializedVault) => {
       this.handleUserAuthenticated(initializedVault);
     });
 
     // 4. Vérification de session enregistrée
-    console.log('[App] 💾 Étape 4 : Vérification de session persistante...');
+    logger.debug('App', '💾 Étape 4 : Vérification de session persistante...');
     await this.authController.checkSavedSession();
 
     // 5. Configuration des onglets de navigation
-    console.log('[App] 🧭 Étape 5 : Configuration de la navigation par onglets...');
+    logger.debug('App', '🧭 Étape 5 : Configuration de la navigation par onglets...');
     this.initNavigation();
 
-    console.log('%c[App] ✅ Initialisation terminée avec succès. Prêt pour l\'authentification.', 'color: #10b981;');
+    logger.info('App', '✅ Initialisation terminée avec succès. Prêt pour l\'authentification.');
   }
 
   async handleUserAuthenticated(vault) {
-    console.log('%c[App] 🚀 Utilisateur authentifié ! Démarrage des sous-systèmes P2P...', 'color: #8b5cf6; font-weight: bold;');
+    logger.info('App', '🚀 Utilisateur authentifié ! Démarrage des sous-systèmes P2P...');
 
     // Masquage de l'écran d'onboarding et affichage de l'interface principale
     const authView = document.getElementById('view-auth');
@@ -76,20 +79,20 @@ class P2PApp {
     }
 
     // 1. Démarrage du réseau P2P Mesh
-    console.log('[App] 🌐 Instanciation du P2PMeshNetwork...');
+    logger.debug('App', '🌐 Instanciation du P2PMeshNetwork...');
     this.mesh = new P2PMeshNetwork(vault);
 
     // 2. Démarrage de la présence et de la télémétrie
-    console.log('[App] 👥 Instanciation de PresenceManager...');
+    logger.debug('App', '👥 Instanciation de PresenceManager...');
     this.presence = new PresenceManager(this.mesh);
     this.presence.start();
 
     // 3. Démarrage du moteur CRDT
-    console.log('[App] ⚙️ Instanciation de CRDTEngine...');
+    logger.debug('App', '⚙️ Instanciation de CRDTEngine...');
     this.crdt = new CRDTEngine(this.mesh, vault);
 
     // 4. Initialisation des contrôleurs fonctionnels
-    console.log('[App] 💬 Initialisation ChatController, ForumController, DriveController, CallController...');
+    logger.debug('App', '💬 Initialisation ChatController, ForumController, DriveController, CallController...');
     this.chatController = new ChatController(this.crdt, vault);
     this.forumController = new ForumController(this.crdt, vault);
     this.driveController = new DriveController(this.crdt, this.mesh, vault);
@@ -103,16 +106,16 @@ class P2PApp {
     this.initStatusListeners();
 
     // 6. Lancement du réseau et signalement
-    console.log('[App] 📡 Lancement de la connexion P2P Mesh...');
+    logger.info('App', '📡 Lancement de la connexion P2P Mesh...');
     await this.mesh.start();
 
-    // 5b. Panneau de réglages / profil
+    // 5b. Panneau de réglages / profil & diagnostic
     this.setupSettingsPanel(vault);
     const gear = document.getElementById('btn-open-settings');
     if (gear) gear.classList.remove('hidden');
 
     // 7. Chargement initial des données
-    console.log('[App] 📂 Chargement initial des données locales...');
+    logger.debug('App', '📂 Chargement initial des données locales...');
     await this.chatController.loadChannelMessages('general');
     await this.forumController.loadThreads();
     await this.driveController.loadFiles();
@@ -121,14 +124,18 @@ class P2PApp {
     try {
       const lastTab = await dbManager.getSetting('active_tab', 'chat');
       if (lastTab && lastTab !== 'chat') this.switchTab(lastTab);
-    } catch {}
+    } catch (e) {
+      logger.debug('App', 'Erreur restauration active_tab:', e);
+    }
 
-    // 8. Initialisation de l'Offscreen Document pour le maintien WebRTC
+    // 8. Initialisation de l'Offscreen Document pour le maintien WebRTC (Extension Chrome)
     try {
-      console.log('[App] 📴 Demande d\'initialisation du document Offscreen au Service Worker...');
-      chrome.runtime.sendMessage({ type: 'INIT_OFFSCREEN' });
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        logger.debug('App', '📴 Demande d\'initialisation du document Offscreen au Service Worker...');
+        chrome.runtime.sendMessage({ type: 'INIT_OFFSCREEN' });
+      }
     } catch (err) {
-      console.warn('[App] Erreur envoi message INIT_OFFSCREEN:', err);
+      logger.debug('App', 'Offscreen document non requis ou non supporté sur cette plateforme:', err);
     }
 
     Toast.success('Connecté au réseau P2P Décentralisé !');
@@ -142,7 +149,7 @@ class P2PApp {
     const footerLatency = document.getElementById('footer-latency');
 
     this.mesh.on('status-change', ({ status, peersCount, message }) => {
-      console.log(`[App] 📶 Statut réseau changé: "${status}" (${peersCount || 0} pairs) - ${message}`);
+      logger.info('App', `📶 Statut réseau changé: "${status}" (${peersCount || 0} pairs) - ${message}`);
       if (statusDot) {
         statusDot.className = `status-dot ${status === 'connected' ? 'online' : 'connecting'}`;
       }
@@ -158,8 +165,12 @@ class P2PApp {
 
       // Mise à jour du badge de l'icône de l'extension
       try {
-        chrome.runtime.sendMessage({ type: 'UPDATE_BADGE', peersCount: peersCount || 0 });
-      } catch {}
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+          chrome.runtime.sendMessage({ type: 'UPDATE_BADGE', peersCount: peersCount || 0 });
+        }
+      } catch (e) {
+        logger.debug('App', 'Erreur mise à jour badge icône:', e);
+      }
     });
 
     this.presence.onPresenceUpdate((peerList) => {
@@ -197,20 +208,22 @@ class P2PApp {
   }
 
   switchTab(tabName) {
-    console.log(`[App] 🧭 Navigation vers l'onglet: "${tabName}"`);
+    logger.debug('App', `🧭 Navigation vers l'onglet: "${tabName}"`);
     this.currentTab = tabName;
     // Persiste l'onglet actif (restauré au prochain démarrage).
-    try { dbManager.saveSetting('active_tab', tabName); } catch {}
+    try {
+      dbManager.saveSetting('active_tab', tabName);
+    } catch (e) {
+      logger.debug('App', 'Erreur sauvegarde active_tab:', e);
+    }
     // Réinitialise le compteur de non-lus du chat en revenant dessus.
     if (tabName === 'chat' && this.chatController) this.chatController.markActiveChannelRead();
 
     // Mise à jour des boutons de navigation
     document.querySelectorAll('.nav-tab-btn').forEach(btn => {
-      if (btn.getAttribute('data-tab') === tabName) {
-        btn.classList.add('active');
-      } else {
-        btn.classList.remove('active');
-      }
+      const isTarget = btn.getAttribute('data-tab') === tabName;
+      btn.classList.toggle('active', isTarget);
+      btn.setAttribute('aria-selected', isTarget ? 'true' : 'false');
     });
 
     // Affichage de la vue correspondante
@@ -291,7 +304,7 @@ class P2PApp {
   }
 
   /**
-   * Configure le panneau de réglages / profil (en-tête ⚙️).
+   * Configure le panneau de réglages / profil & diagnostic (en-tête ⚙️).
    */
   setupSettingsPanel(vault) {
     const gear = document.getElementById('btn-open-settings');
@@ -306,10 +319,19 @@ class P2PApp {
     const btnCopyTopic = document.getElementById('btn-copy-topic');
     const btnCopyPaper = document.getElementById('btn-copy-paper');
     const btnLogout = document.getElementById('btn-logout');
+    const btnExportDiag = document.getElementById('btn-export-diagnostic');
+    const logSelect = document.getElementById('settings-loglevel');
+    const debugInput = document.getElementById('settings-debug-filter');
 
     const flashCopy = async (btn, text) => {
-      try { await navigator.clipboard.writeText(text); } catch {}
-      const o = btn.textContent; btn.textContent = '✓'; btn.classList.add('copied-flash');
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (err) {
+        logger.warn('App', 'Presse-papier non accessible:', err);
+      }
+      const o = btn.textContent;
+      btn.textContent = '✓';
+      btn.classList.add('copied-flash');
       setTimeout(() => { btn.textContent = o; btn.classList.remove('copied-flash'); }, 1400);
     };
 
@@ -326,6 +348,24 @@ class P2PApp {
         paperEl.textContent = code ? code : '——';
       }
       if (notifChk) notifChk.checked = await dbManager.getSetting('notifications_enabled', false);
+
+      // Diagnostic & logging config
+      if (logSelect) {
+        try {
+          const lvl = localStorage.getItem('pmesh.loglevel') || 'INFO';
+          logSelect.value = lvl.toUpperCase();
+        } catch (e) {
+          logger.debug('App', 'Erreur lecture pmesh.loglevel:', e);
+        }
+      }
+      if (debugInput) {
+        try {
+          debugInput.value = localStorage.getItem('pmesh.debug') || '';
+        } catch (e) {
+          logger.debug('App', 'Erreur lecture pmesh.debug:', e);
+        }
+      }
+
       await this.refreshStorageUI();
       Modal.open('modal-settings');
     };
@@ -340,7 +380,11 @@ class P2PApp {
         await dbManager.saveSetting('user_name', newName);
         if (idNameEl) idNameEl.textContent = newName;
         // Informe les pairs du nouveau nom (mise à jour du roster).
-        try { this.mesh.broadcast({ type: 'PEER_HELLO', name: newName, pubkey: vault.publicKeyHex }); } catch {}
+        try {
+          this.mesh.broadcast({ type: 'PEER_HELLO', name: newName, pubkey: vault.publicKeyHex });
+        } catch (err) {
+          logger.warn('App', 'Échec diffusion PEER_HELLO lors du changement de nom:', err);
+        }
         Toast.success('Pseudonyme mis à jour.');
       });
     }
@@ -351,18 +395,76 @@ class P2PApp {
     if (notifChk) {
       notifChk.addEventListener('change', async () => {
         if (notifChk.checked && 'Notification' in window && Notification.permission === 'default') {
-          try { await Notification.requestPermission(); } catch {}
+          try {
+            await Notification.requestPermission();
+          } catch (err) {
+            logger.warn('App', 'Demande de permission notification refusée:', err);
+          }
         }
         await dbManager.saveSetting('notifications_enabled', notifChk.checked);
+      });
+    }
+
+    if (logSelect) {
+      logSelect.addEventListener('change', () => {
+        try {
+          localStorage.setItem('pmesh.loglevel', logSelect.value);
+          logger.info('App', `Niveau de log défini sur: ${logSelect.value}`);
+          Toast.info(`Niveau de journalisation : ${logSelect.value}`);
+        } catch (e) {
+          logger.warn('App', 'Impossible de sauvegarder pmesh.loglevel:', e);
+        }
+      });
+    }
+
+    if (debugInput) {
+      debugInput.addEventListener('change', () => {
+        try {
+          const val = debugInput.value.trim();
+          if (val) localStorage.setItem('pmesh.debug', val);
+          else localStorage.removeItem('pmesh.debug');
+          logger.info('App', `Filtre debug mis à jour: ${val || 'aucun'}`);
+          Toast.info('Filtres de débogage mis à jour.');
+        } catch (e) {
+          logger.warn('App', 'Impossible de sauvegarder pmesh.debug:', e);
+        }
+      });
+    }
+
+    if (btnExportDiag) {
+      btnExportDiag.addEventListener('click', async () => {
+        try {
+          const diag = await logger.exportDiagnostic({
+            topicHex: vault.topicHex,
+            peerId: vault.peerId,
+            connectedPeersCount: this.mesh ? this.mesh.peers.size : 0,
+            rosterCount: this.presence ? this.presence.roster.size : 0,
+            activeChannel: this.currentTab
+          });
+          const jsonStr = JSON.stringify(diag, null, 2);
+          const blob = new Blob([jsonStr], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `p2p-mesh-diagnostic-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          Toast.success('Rapport de diagnostic exporté avec succès !');
+        } catch (err) {
+          logger.error('App', 'Échec de l\'export du diagnostic:', err);
+          Toast.error('Impossible d\'exporter le rapport de diagnostic.');
+        }
       });
     }
 
     if (btnLogout) {
       btnLogout.addEventListener('click', async () => {
         if (!confirm('Se déconnecter et effacer la session locale (le code papier restera nécessaire pour revenir) ?')) return;
-        try { await dbManager.delete('settings', 'last_paper_code'); } catch {}
-        try { this.mesh && this.mesh.stop(); } catch {}
-        try { this.presence && this.presence.stop(); } catch {}
+        try { await dbManager.delete('settings', 'last_paper_code'); } catch (e) { logger.warn('App', 'Erreur suppression session locale:', e); }
+        try { this.mesh && this.mesh.stop(); } catch (e) { logger.warn('App', 'Erreur arrêt mesh:', e); }
+        try { this.presence && this.presence.stop(); } catch (e) { logger.warn('App', 'Erreur arrêt presence:', e); }
         Toast.info('Déconnexion…');
         setTimeout(() => location.reload(), 500);
       });
@@ -401,5 +503,5 @@ class P2PApp {
 // Initialisation globale
 document.addEventListener('DOMContentLoaded', () => {
   const app = new P2PApp();
-  app.init().catch(err => console.error('[App] ❌ Erreur fatale au démarrage:', err));
+  app.init().catch(err => logger.error('App', '❌ Erreur fatale au démarrage:', err));
 });

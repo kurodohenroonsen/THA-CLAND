@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 /**
  * Coffre-fort Cryptographique Web Crypto API - P2P Mesh
  * Dérivation de clé sans serveur, chiffrement AES-GCM-256, hachage SHA-256 et signatures ECDSA.
@@ -66,7 +67,7 @@ export class CryptoVault {
    * mémorisable/transcriptible. Voir RAPPORT_AUDIT pour le compromis entropie/UX.
    */
   static generatePaperCode(wordCount = 6) {
-    console.log('[CryptoVault] 🎲 Génération d\'un nouveau code papier maître...');
+    logger.debug('Vault', '🎲 Génération d\'un nouveau code papier maître...');
     const words = CryptoVault.WORDLIST;
     const parts = [];
     for (let i = 0; i < wordCount; i++) {
@@ -76,7 +77,7 @@ export class CryptoVault {
     parts.push(CryptoVault._uniformInt(10000).toString().padStart(4, '0'));
 
     const generated = parts.join('-');
-    console.log(`[CryptoVault] ✨ Code généré (${wordCount} mots, ≈${Math.round(wordCount * Math.log2(words.length) + Math.log2(10000))} bits d'entropie)`);
+    logger.debug('Vault', `✨ Code généré (${wordCount} mots, ≈${Math.round(wordCount * Math.log2(words.length) + Math.log2(10000))} bits d'entropie)`);
     return generated;
   }
 
@@ -136,14 +137,14 @@ export class CryptoVault {
       throw new Error('Code papier invalide');
     }
 
-    console.log(`%c[CryptoVault] 🔐 Démarrage dérivation cryptographique pour le code: "${paperCode.trim()}" (Utilisateur: "${customName}")`, 'color: #06b6d4; font-weight: bold;');
+    logger.info('Vault', `🔐 Démarrage dérivation cryptographique (Utilisateur: "${customName}")`);
 
     const cleanCode = paperCode.trim().toUpperCase();
     const encoder = new TextEncoder();
     const codeBuffer = encoder.encode(cleanCode);
 
     // 1. Clé brute de base (Passphrase)
-    console.log('[CryptoVault] ➡️ Étape 1/7 : Import de la clé brute PBKDF2...');
+    logger.debug('Vault', '➡️ Étape 1/7 : Import de la clé brute PBKDF2...');
     const baseKey = await crypto.subtle.importKey(
       'raw',
       codeBuffer,
@@ -160,7 +161,7 @@ export class CryptoVault {
     // et (b) domaine-sépare le sel avec la version applicative. La vraie défense
     // contre le brute-force reste l'entropie du code papier (cf. generatePaperCode).
     const ITERATIONS = CryptoVault.PBKDF2_ITERATIONS;
-    console.log(`[CryptoVault] ➡️ Étape 2/7 : Calcul PBKDF2 (${ITERATIONS} itérations SHA-512)...`);
+    logger.debug('Vault', `➡️ Étape 2/7 : Calcul PBKDF2 (${ITERATIONS} itérations SHA-512)...`);
     const staticSalt = encoder.encode('P2P_MESH_DECENTRALIZED_WORKSPACE_SALT_v2');
     const masterDeriveBits = await crypto.subtle.deriveBits(
       {
@@ -174,7 +175,7 @@ export class CryptoVault {
     );
 
     // 3. Import en tant que clé maîtresse HKDF
-    console.log('[CryptoVault] ➡️ Étape 3/7 : Import de la clé maîtresse HKDF...');
+    logger.debug('Vault', '➡️ Étape 3/7 : Import de la clé maîtresse HKDF...');
     const hkdfMasterKey = await crypto.subtle.importKey(
       'raw',
       masterDeriveBits,
@@ -184,7 +185,7 @@ export class CryptoVault {
     );
 
     // 4. Dérivation du Topic ID (20 octets hex pour compatibilité WebTorrent infoHash & Nostr)
-    console.log('[CryptoVault] ➡️ Étape 4/7 : Dérivation du Topic ID de rendez-vous...');
+    logger.debug('Vault', '➡️ Étape 4/7 : Dérivation du Topic ID de rendez-vous...');
     const topicBits = await crypto.subtle.deriveBits(
       {
         name: 'HKDF',
@@ -197,10 +198,10 @@ export class CryptoVault {
     );
     this.topicHex = CryptoVault.bufferToHex(topicBits);
     this.topicId = this.topicHex;
-    console.log(`[CryptoVault] 🏷️ Topic ID calculé: ${this.topicHex} (infoHash 20-bytes)`);
+    logger.debug('Vault', `🏷️ Topic ID calculé: ${this.topicHex.substring(0, 10)}... (infoHash 20-bytes)`);
 
     // 5. Dérivation de la clé de signalement WebRTC (AES-GCM 256-bit)
-    console.log('[CryptoVault] ➡️ Étape 5/7 : Dérivation de la clé de signalement WebRTC (AES-GCM 256)...');
+    logger.debug('Vault', '➡️ Étape 5/7 : Dérivation de la clé de signalement WebRTC (AES-GCM 256)...');
     this.signalingKey = await crypto.subtle.deriveKey(
       {
         name: 'HKDF',
@@ -215,7 +216,7 @@ export class CryptoVault {
     );
 
     // 6. Dérivation de la clé de contenu (Messages, Fichiers, Forums) (AES-GCM 256-bit)
-    console.log('[CryptoVault] ➡️ Étape 6/7 : Dérivation de la clé de contenu (AES-GCM 256)...');
+    logger.debug('Vault', '➡️ Étape 6/7 : Dérivation de la clé de contenu (AES-GCM 256)...');
     this.contentKey = await crypto.subtle.deriveKey(
       {
         name: 'HKDF',
@@ -236,7 +237,7 @@ export class CryptoVault {
     // autre. On lie désormais peerId = SHA-256(clé publique)[:20]. Combiné à la
     // vérification de signature à la réception (verifyObject), un pair ne peut plus
     // se faire passer pour un autre sans posséder la clé privée correspondante.
-    console.log('[CryptoVault] ➡️ Étape 7/7 : Génération de la paire ECDSA P-256 et dérivation du Peer ID...');
+    logger.debug('Vault', '➡️ Étape 7/7 : Génération de la paire ECDSA P-256 et dérivation du Peer ID...');
     this.signingKeyPair = await crypto.subtle.generateKey(
       {
         name: 'ECDSA',
@@ -264,7 +265,7 @@ export class CryptoVault {
     };
 
     this.isInitialized = true;
-    console.log(`%c[CryptoVault] 🎯 INITIALISATION RÉUSSIE ! Topic: ${this.topicHex.substring(0, 10)}... | PeerId: ${this.peerId} | User: ${this.userName}`, 'color: #10b981; font-weight: bold;');
+    logger.info('Vault', `🎯 INITIALISATION RÉUSSIE ! Topic: ${this.topicHex.substring(0, 10)}... | PeerId: ${this.peerId} | User: ${this.userName}`);
     return this;
   }
 
@@ -330,7 +331,8 @@ export class CryptoVault {
     const decodedStr = new TextDecoder().decode(decryptedBuffer);
     try {
       return JSON.parse(decodedStr);
-    } catch {
+    } catch (e) {
+      logger.debug('Vault', 'Payload non JSON après déchiffrement, renvoi chaîne brute');
       return decodedStr;
     }
   }
@@ -429,7 +431,7 @@ export class CryptoVault {
         encoder.encode(payload)
       );
     } catch (err) {
-      console.warn('[CryptoVault] ⚠️ Échec de vérification de signature:', err);
+      logger.warn('Vault', 'Échec de vérification de signature:', err);
       return false;
     }
   }
@@ -455,7 +457,7 @@ export class CryptoVault {
       const expected = (await CryptoVault.hashSHA256(pubkey)).substring(0, 16);
       const claimed = String(obj[idField]).replace(/^peer_/, '').substring(0, 16);
       if (claimed !== expected) {
-        console.warn('[CryptoVault] ⚠️ Identité incohérente avec la clé publique (usurpation ?)');
+        logger.warn('Vault', 'Identité incohérente avec la clé publique (usurpation ?)');
         return false;
       }
     }

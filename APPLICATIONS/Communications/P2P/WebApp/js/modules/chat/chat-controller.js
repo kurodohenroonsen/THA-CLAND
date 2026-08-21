@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 /**
  * Contrôleur de Chat Instantané & Salons P2P
  * Gestion des messages en direct, des canaux thématiques, des indicateurs "est en train d'écrire..." et du rendu riche.
@@ -46,7 +47,7 @@ export class ChatController {
   }
 
   initUI() {
-    console.log('[Chat] 💬 Initialisation du contrôleur de chat...');
+    logger.debug('Chat', '💬 Initialisation du contrôleur de chat...');
     this.messagesContainer = document.getElementById('chat-messages-list');
     this.messageInput = document.getElementById('chat-input-text');
     this.sendButton = document.getElementById('btn-chat-send');
@@ -157,7 +158,7 @@ export class ChatController {
   initListeners() {
     // 1. Réception d'un message en temps réel via CRDT
     this.crdt.on('chat-message-received', (msg) => {
-      console.log(`%c[Chat] 💬 Nouveau message reçu dans #${msg.channelId} de ${msg.authorName}`, 'color: #06b6d4; font-weight: bold;');
+      logger.info('Chat', `💬 Nouveau message reçu dans #${msg.channelId} de ${msg.authorName}`);
       
       // Si l'auteur écrivait, on retire son indicateur de frappe
       if (this.typingPeers.has(msg.authorId)) {
@@ -219,7 +220,7 @@ export class ChatController {
 
     // 3. Synchronisation par lot après reconnexion
     this.crdt.on('chat-synced', () => {
-      console.log('[Chat] 🔄 Synchronisation du salon actif suite au rattrapage CRDT...');
+      logger.info('Chat', '🔄 Synchronisation du salon actif suite au rattrapage CRDT...');
       this.loadChannelMessages(this.activeChannelId);
     });
   }
@@ -318,13 +319,17 @@ export class ChatController {
       if (!document.hidden) return;
       dbManager.getSetting('notifications_enabled', false).then((enabled) => {
         if (!enabled) return;
-        chrome.runtime.sendMessage({
-          type: 'SHOW_NOTIFICATION',
-          title: `💬 ${msg.authorName || 'Nouveau message'} • #${msg.channelId}`,
-          body: (msg.text || '').substring(0, 120)
-        });
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+          chrome.runtime.sendMessage({
+            type: 'SHOW_NOTIFICATION',
+            title: `💬 ${msg.authorName || 'Nouveau message'} • #${msg.channelId}`,
+            body: (msg.text || '').substring(0, 120)
+          });
+        }
       });
-    } catch {}
+    } catch (err) {
+      logger.warn('Chat', 'Échec envoi notification bureau:', err);
+    }
   }
 
   async switchChannel(channelId, channelName) {
@@ -354,7 +359,7 @@ export class ChatController {
 
     // Libère les URLs média de la vue précédente (les blocs restent en cache local,
     // le ré-affichage est donc immédiat sans re-télécharger le réseau).
-    for (const url of this.attachmentUrls.values()) { try { URL.revokeObjectURL(url); } catch {} }
+    for (const url of this.attachmentUrls.values()) { try { URL.revokeObjectURL(url); } catch (e) { logger.debug('Chat', 'Erreur revokeObjectURL:', e); } }
     this.attachmentUrls.clear();
 
     const messages = await dbManager.getMessagesByChannel(channelId);
@@ -507,7 +512,7 @@ export class ChatController {
       try {
         attachments = await this.buildAttachmentDescriptors();
       } catch (err) {
-        console.error('[Chat] ❌ Découpage média échoué:', err);
+        logger.error('Chat', 'Découpage média échoué:', err);
         Toast.error("Impossible de préparer le média.");
         if (this.attachBtn) this.attachBtn.disabled = false;
         return;
@@ -523,7 +528,7 @@ export class ChatController {
     this.renderStaged();
 
     try {
-      console.log(`[Chat] 📤 Envoi message dans #${this.activeChannelId} (${attachments.length} pièce(s) jointe(s))`);
+      logger.info('Chat', `📤 Envoi message dans #${this.activeChannelId} (${attachments.length} pièce(s) jointe(s))`);
       const msg = await this.crdt.createChatMessage(this.activeChannelId, text, attachments);
 
       const emptyState = this.messagesContainer?.querySelector('.empty-chat-state');
@@ -532,7 +537,7 @@ export class ChatController {
       this.appendMessageElement(msg);
       this.scrollToBottom();
     } catch (err) {
-      console.error('[Chat] ❌ Erreur envoi message:', err);
+      logger.error('Chat', 'Erreur envoi message:', err);
       Toast.error("Impossible d'envoyer le message.");
     }
   }
@@ -638,7 +643,7 @@ export class ChatController {
       else if (kind === 'audio') this._fillAudio(box, url);
       else this._triggerDownload(url, att.fileName, btn);
     } catch (err) {
-      console.error('[Chat] ❌ Réception média échouée:', err);
+      logger.error('Chat', 'Réception média échouée:', err);
       Toast.error(`Média « ${att.fileName} » indisponible (aucune source ?).`);
       if (btn) { btn.disabled = false; btn.textContent = '↻ Réessayer'; }
       else if (wrap) wrap.innerHTML = '<div class="att-loading att-error">⚠️ Échec — appuyez pour réessayer</div>';

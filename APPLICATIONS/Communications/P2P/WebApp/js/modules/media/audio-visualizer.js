@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 /**
  * Visualiseur Audio Canvas en Temps Réel
  * Animation fluide par onde spectrale / barres lumineuses avec dégradé cyan/violet.

@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 /**
  * Moteur de Versioning Git-like, Arborescence Hiérarchique & Merkle DAG
  * Gestion des dossiers/sous-dossiers, commits immuables, dédoublonnage de blocs et historique.
