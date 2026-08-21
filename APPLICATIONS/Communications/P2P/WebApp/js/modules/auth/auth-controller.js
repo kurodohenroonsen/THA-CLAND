@@ -88,10 +88,12 @@ export class AuthController {
           logger.debug('Auth', '⏳ Appel de CryptoVault.initializeFromPaperCode...');
           await this.vault.initializeFromPaperCode(code, name || 'Membre P2P');
 
-          // Sauvegarde de la session locale
-          logger.debug('Auth', '💾 Enregistrement de la session dans IndexedDB...');
-          await dbManager.saveSetting('last_paper_code', code);
+          // Nettoyage de sécurité : ne JAMAIS persister le code papier en clair dans IndexedDB
+          await dbManager.delete('settings', 'last_paper_code').catch(() => {});
           await dbManager.saveSetting('user_name', name || 'Membre P2P');
+
+          // Purge de l'input dans le DOM après dérivation
+          if (inputCode) inputCode.value = '';
 
           Toast.success(`Bienvenue ${name} ! Connexion au maillage P2P...`);
           
@@ -118,15 +120,7 @@ export class AuthController {
     const bitsEl = document.getElementById('entropy-bits');
     if (!fill || !text) return;
 
-    const bits = CryptoVault.estimatePaperCodeEntropyBits(code || '');
-    // Barème adapté au schéma (PBKDF2 100k SHA-512 ajoute ~17 bits de facteur de
-    // travail) : < 40 faible, 40–59 moyenne, ≥ 60 forte. Un code généré par
-    // défaut (~61 bits) est ainsi correctement classé « fort ».
-    let pct, cls, label;
-    if (!code) { pct = 0; cls = ''; label = 'Saisissez ou générez un code'; }
-    else if (bits < 40) { pct = Math.min(38, bits); cls = 'e-weak'; label = 'Robustesse faible'; }
-    else if (bits < 60) { pct = 40 + (bits - 40) * 1.5; cls = 'e-medium'; label = 'Robustesse moyenne'; }
-    else { pct = Math.min(100, 70 + (bits - 60) * 0.5); cls = 'e-strong'; label = 'Robustesse forte'; }
+    const { bits, label, cls, pct } = CryptoVault.calculateEntropy(code);
 
     fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
     fill.className = `entropy-meter-fill ${cls}`;
@@ -135,22 +129,13 @@ export class AuthController {
   }
 
   /**
-   * Vérifie si une session précédente existe pour reconnexion automatique
+   * Restaure uniquement le pseudonyme sauvegardé (Zero-Trace pour le code maître)
    */
   async checkSavedSession() {
-    logger.debug('Auth', '🔍 Recherche d\'une session précédente enregistrée...');
-    const savedCode = await dbManager.getSetting('last_paper_code');
     const savedName = await dbManager.getSetting('user_name', 'Membre P2P');
-
-    if (savedCode) {
-      logger.info('Auth', `🔄 Session précédente retrouvée pour "${savedName}"`);
-      const inputCode = document.getElementById('input-paper-code');
-      const inputName = document.getElementById('input-user-name');
-      if (inputCode) inputCode.value = savedCode;
-      if (inputName) inputName.value = savedName;
-      this.updateEntropyMeter(savedCode);
-    } else {
-      logger.debug('Auth', 'ℹ️ Aucune session précédente trouvée.');
+    const inputName = document.getElementById('input-user-name');
+    if (inputName && savedName) {
+      inputName.value = savedName;
     }
   }
 }

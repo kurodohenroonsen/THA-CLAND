@@ -342,11 +342,10 @@ class P2PApp {
       if (topicEl) topicEl.textContent = `${vault.topicHex.substring(0, 16)}…`;
       if (fpEl) fpEl.textContent = vault.peerIdHex ? vault.peerIdHex.substring(0, 16) : '—';
       if (avatarEl && this.presence) avatarEl.src = this.presence.generateAvatar(vault.peerId);
-      // Code papier depuis la session locale
+      // Code papier sécurisé Zero-Trace
       if (paperEl) {
-        const code = await dbManager.getSetting('last_paper_code', '');
-        paperEl.dataset.code = code || '';
-        paperEl.textContent = code ? code : '——';
+        paperEl.dataset.code = '';
+        paperEl.textContent = '🔒 Masqué (Zéro-Trace RAM)';
       }
       if (notifChk) notifChk.checked = await dbManager.getSetting('notifications_enabled', false);
 
@@ -483,7 +482,9 @@ class P2PApp {
       const i = Math.floor(Math.log(b) / Math.log(k));
       return `${(b / Math.pow(k, i)).toFixed(1)} ${u[i]}`;
     };
-    const label = est.quota ? `${fmt(est.usage)} / ${fmt(est.quota)} (${est.percent}%)` : fmt(est.usage);
+    const isPersisted = await dbManager.isPersisted();
+    const persBadge = isPersisted ? ' 🔒 (Persistant)' : ' ⚠️ (Évictable)';
+    const label = est.quota ? `${fmt(est.usage)} / ${fmt(est.quota)} (${est.percent}%)${persBadge}` : `${fmt(est.usage)}${persBadge}`;
     const pct = est.quota ? est.percent : 0;
     const setBar = (barId, txtId) => {
       const bar = document.getElementById(barId), txt = document.getElementById(txtId);
